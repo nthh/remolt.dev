@@ -1,6 +1,7 @@
 """Tests for remolt server — backend abstraction, session lifecycle, API."""
 
 import asyncio
+import base64
 import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -94,13 +95,16 @@ def fake_backend():
 
 @pytest.fixture
 def app(fake_backend):
-    """Create a test app with fake backend injected."""
+    """Create a test app with fake backend injected, auth disabled."""
     import server.server as srv
 
     # Inject fake backend
     srv.backend = fake_backend
     srv.sessions.clear()
-    return srv.app
+    original_auth = srv.AUTH_REQUIRED
+    srv.AUTH_REQUIRED = False
+    yield srv.app
+    srv.AUTH_REQUIRED = original_auth
 
 
 @pytest.fixture
@@ -406,22 +410,27 @@ async def test_create_session_uses_warm_pool(fake_backend):
     import server.server as srv
     srv.backend = fake_backend
     srv.sessions.clear()
+    original_auth = srv.AUTH_REQUIRED
+    srv.AUTH_REQUIRED = False
 
-    # Pre-populate warm pool
-    sandbox_id = await fake_backend.create("warm-pool-1", {"TERM": "xterm-256color"})
-    srv.warm_pool.put_nowait(sandbox_id)
+    try:
+        # Pre-populate warm pool
+        sandbox_id = await fake_backend.create("warm-pool-1", {"TERM": "xterm-256color"})
+        srv.warm_pool.put_nowait(sandbox_id)
 
-    initial_count = len(fake_backend.sandboxes)
+        initial_count = len(fake_backend.sandboxes)
 
-    # Create session via API
-    from fastapi.testclient import TestClient
-    client = TestClient(srv.app, raise_server_exceptions=False)
-    resp = client.post("/api/sessions", json={})
-    assert resp.status_code == 200
+        # Create session via API
+        from fastapi.testclient import TestClient
+        client = TestClient(srv.app, raise_server_exceptions=False)
+        resp = client.post("/api/sessions", json={})
+        assert resp.status_code == 200
 
-    # Should have claimed from pool, not created a new one
-    assert len(fake_backend.sandboxes) == initial_count
-    assert srv.warm_pool.qsize() == 0
+        # Should have claimed from pool, not created a new one
+        assert len(fake_backend.sandboxes) == initial_count
+        assert srv.warm_pool.qsize() == 0
+    finally:
+        srv.AUTH_REQUIRED = original_auth
 
 
 @pytest.mark.asyncio
@@ -430,14 +439,263 @@ async def test_create_session_falls_back_to_cold_start(fake_backend):
     import server.server as srv
     srv.backend = fake_backend
     srv.sessions.clear()
+    original_auth = srv.AUTH_REQUIRED
+    srv.AUTH_REQUIRED = False
 
-    # Ensure pool is empty
-    while not srv.warm_pool.empty():
-        srv.warm_pool.get_nowait()
+    try:
+        # Ensure pool is empty
+        while not srv.warm_pool.empty():
+            srv.warm_pool.get_nowait()
 
-    from fastapi.testclient import TestClient
-    client = TestClient(srv.app, raise_server_exceptions=False)
-    resp = client.post("/api/sessions", json={})
+        from fastapi.testclient import TestClient
+        client = TestClient(srv.app, raise_server_exceptions=False)
+        resp = client.post("/api/sessions", json={})
+        assert resp.status_code == 200
+        # Backend should have created a new sandbox
+        assert len(fake_backend.sandboxes) == 1
+    finally:
+        srv.AUTH_REQUIRED = original_auth
+
+
+# ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_auth_cookie(login="testuser", name="Test User", email="test@example.com", gh_token="ghp_test123"):
+    """Build a signed auth cookie for testing."""
+    import server.server as srv
+    payload = base64.b64encode(json.dumps({
+        "login": login,
+        "name": name,
+        "email": email,
+        "gh_token": gh_token,
+    }).encode()).decode()
+    return srv._sign_cookie(payload)
+
+
+@pytest.fixture
+def auth_client(fake_backend):
+    """Test client with AUTH_REQUIRED=True."""
+    import server.server as srv
+    srv.backend = fake_backend
+    srv.sessions.clear()
+    original = srv.AUTH_REQUIRED
+    srv.AUTH_REQUIRED = True
+    try:
+        yield TestClient(srv.app, raise_server_exceptions=False)
+    finally:
+        srv.AUTH_REQUIRED = original
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: Cookie signing
+# ---------------------------------------------------------------------------
+
+
+def test_sign_and_verify_cookie():
+    import server.server as srv
+    signed = srv._sign_cookie("hello")
+    assert "." in signed
+    assert srv._verify_cookie(signed) == "hello"
+
+
+def test_verify_cookie_rejects_tampered():
+    import server.server as srv
+    signed = srv._sign_cookie("hello")
+    tampered = signed[:-1] + ("a" if signed[-1] != "a" else "b")
+    assert srv._verify_cookie(tampered) is None
+
+
+def test_verify_cookie_rejects_no_dot():
+    import server.server as srv
+    assert srv._verify_cookie("nosignature") is None
+
+
+# ---------------------------------------------------------------------------
+# Auth endpoint tests: /auth/me
+# ---------------------------------------------------------------------------
+
+
+def test_auth_me_returns_anonymous_when_auth_disabled(client):
+    """When AUTH_REQUIRED=False, /auth/me returns anonymous user."""
+    resp = client.get("/auth/me")
     assert resp.status_code == 200
-    # Backend should have created a new sandbox
+    data = resp.json()
+    assert data["login"] == "anonymous"
+    assert data["auth_required"] is False
+
+
+def test_auth_me_returns_401_when_auth_required_no_cookie(auth_client):
+    """When AUTH_REQUIRED=True and no cookie, /auth/me returns 401."""
+    resp = auth_client.get("/auth/me")
+    assert resp.status_code == 401
+
+
+def test_auth_me_returns_user_with_valid_cookie(auth_client):
+    """When AUTH_REQUIRED=True and valid cookie, /auth/me returns user info."""
+    cookie = _make_auth_cookie()
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.get("/auth/me")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["login"] == "testuser"
+    assert data["name"] == "Test User"
+    assert data["email"] == "test@example.com"
+    assert data["auth_required"] is True
+    # gh_token should NOT be exposed in /auth/me
+    assert "gh_token" not in data
+
+
+def test_auth_me_rejects_invalid_cookie(auth_client):
+    """Tampered cookie should be rejected."""
+    auth_client.cookies.set("remolt_auth", "garbage.data")
+    resp = auth_client.get("/auth/me")
+    assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Auth endpoint tests: /auth/login
+# ---------------------------------------------------------------------------
+
+
+def test_auth_login_redirects_to_github(client):
+    import server.server as srv
+    original = srv.GITHUB_CLIENT_ID
+    srv.GITHUB_CLIENT_ID = "test-client-id"
+    try:
+        resp = client.get("/auth/login", follow_redirects=False)
+        assert resp.status_code in (302, 307)
+        location = resp.headers["location"]
+        assert "github.com/login/oauth/authorize" in location
+        assert "client_id=test-client-id" in location
+        assert "repo" not in location  # no repo scope by default
+    finally:
+        srv.GITHUB_CLIENT_ID = original
+
+
+def test_auth_login_with_repo_scope(client):
+    import server.server as srv
+    original = srv.GITHUB_CLIENT_ID
+    srv.GITHUB_CLIENT_ID = "test-client-id"
+    try:
+        resp = client.get("/auth/login?repo=true", follow_redirects=False)
+        assert resp.status_code in (302, 307)
+        location = resp.headers["location"]
+        assert "repo" in location
+    finally:
+        srv.GITHUB_CLIENT_ID = original
+
+
+def test_auth_login_returns_501_when_not_configured(client):
+    import server.server as srv
+    original = srv.GITHUB_CLIENT_ID
+    srv.GITHUB_CLIENT_ID = ""
+    try:
+        resp = client.get("/auth/login")
+        assert resp.status_code == 501
+    finally:
+        srv.GITHUB_CLIENT_ID = original
+
+
+# ---------------------------------------------------------------------------
+# Auth endpoint tests: /auth/logout
+# ---------------------------------------------------------------------------
+
+
+def test_auth_logout_clears_cookie(client):
+    resp = client.post("/auth/logout", follow_redirects=False)
+    assert resp.status_code == 303
+    # Cookie should be deleted
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert "remolt_auth" in set_cookie
+
+
+# ---------------------------------------------------------------------------
+# Auth-gated session creation
+# ---------------------------------------------------------------------------
+
+
+def test_create_session_requires_auth(auth_client):
+    """When AUTH_REQUIRED=True, POST /api/sessions without cookie returns 401."""
+    resp = auth_client.post("/api/sessions", json={})
+    assert resp.status_code == 401
+
+
+def test_create_session_works_with_valid_cookie(auth_client, fake_backend):
+    """When AUTH_REQUIRED=True, valid cookie allows session creation."""
+    cookie = _make_auth_cookie()
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.post("/api/sessions", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "running"
     assert len(fake_backend.sandboxes) == 1
+
+
+def test_create_session_injects_github_token(auth_client, fake_backend):
+    """OAuth GitHub token is injected as GITHUB_TOKEN env var."""
+    cookie = _make_auth_cookie(gh_token="ghp_oauth_token")
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.post("/api/sessions", json={})
+    assert resp.status_code == 200
+    sb = list(fake_backend.sandboxes.values())[0]
+    assert sb["env"]["GITHUB_TOKEN"] == "ghp_oauth_token"
+
+
+def test_create_session_injects_api_key(auth_client, fake_backend):
+    """api_key from request body is injected as ANTHROPIC_API_KEY."""
+    cookie = _make_auth_cookie()
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.post("/api/sessions", json={"api_key": "sk-ant-test123"})
+    assert resp.status_code == 200
+    sb = list(fake_backend.sandboxes.values())[0]
+    assert sb["env"]["ANTHROPIC_API_KEY"] == "sk-ant-test123"
+
+
+def test_create_session_uses_oauth_git_identity_as_fallback(auth_client, fake_backend):
+    """Git name/email from OAuth user is used when not provided in request."""
+    cookie = _make_auth_cookie(name="OAuth User", email="oauth@example.com")
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.post("/api/sessions", json={})
+    assert resp.status_code == 200
+    sb = list(fake_backend.sandboxes.values())[0]
+    assert sb["env"]["GIT_USER_NAME"] == "OAuth User"
+    assert sb["env"]["GIT_USER_EMAIL"] == "oauth@example.com"
+
+
+def test_create_session_explicit_git_identity_overrides_oauth(auth_client, fake_backend):
+    """Explicit git name/email in request overrides OAuth values."""
+    cookie = _make_auth_cookie(name="OAuth User", email="oauth@example.com")
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.post("/api/sessions", json={
+        "git_user_name": "Custom Name",
+        "git_user_email": "custom@example.com",
+    })
+    assert resp.status_code == 200
+    sb = list(fake_backend.sandboxes.values())[0]
+    assert sb["env"]["GIT_USER_NAME"] == "Custom Name"
+    assert sb["env"]["GIT_USER_EMAIL"] == "custom@example.com"
+
+
+def test_create_session_no_auth_still_works(client, fake_backend):
+    """When AUTH_REQUIRED=False, sessions work without cookies (backwards compat)."""
+    resp = client.post("/api/sessions", json={
+        "github_token": "ghp_manual_pat",
+        "api_key": "sk-ant-manual",
+    })
+    assert resp.status_code == 200
+    sb = list(fake_backend.sandboxes.values())[0]
+    # Manual PAT should be injected since no OAuth token
+    assert sb["env"]["GITHUB_TOKEN"] == "ghp_manual_pat"
+    assert sb["env"]["ANTHROPIC_API_KEY"] == "sk-ant-manual"
+
+
+def test_create_session_oauth_token_preferred_over_manual_pat(auth_client, fake_backend):
+    """OAuth token takes priority over manually-provided github_token."""
+    cookie = _make_auth_cookie(gh_token="ghp_oauth")
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.post("/api/sessions", json={"github_token": "ghp_manual"})
+    assert resp.status_code == 200
+    sb = list(fake_backend.sandboxes.values())[0]
+    assert sb["env"]["GITHUB_TOKEN"] == "ghp_oauth"

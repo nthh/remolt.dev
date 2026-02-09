@@ -23,14 +23,21 @@ function savePrefs(p: Partial<Prefs>) {
 }
 
 export function SetupForm() {
-  const { createSession, phase, error } = useSession();
+  const { createSession, phase, error, authUser } = useSession();
   const [repoUrl, setRepoUrl] = useState('');
   const [gitUserName, setGitUserName] = useState('');
   const [gitUserEmail, setGitUserEmail] = useState('');
 
+  const hasOAuth = authUser && authUser.login !== 'anonymous';
+
   useEffect(() => {
     const p = loadPrefs();
     if (p.repoUrl) setRepoUrl(p.repoUrl);
+    // Pre-fill git identity from OAuth, then override with saved prefs
+    if (hasOAuth) {
+      if (authUser.name) setGitUserName(authUser.name);
+      if (authUser.email) setGitUserEmail(authUser.email);
+    }
     if (p.gitUserName) setGitUserName(p.gitUserName);
     if (p.gitUserEmail) setGitUserEmail(p.gitUserEmail);
   }, []);
@@ -50,8 +57,11 @@ export function SetupForm() {
   return (
     <div className="setup-container">
       <form className="setup-card" onSubmit={handleSubmit}>
-        <h1>Remolt</h1>
-        <p className="subtitle">Sandboxed AI coding sessions in your browser. Claude Code, git, and GitHub CLI pre-installed. Log in interactively &mdash; no API key needed.</p>
+        <h1>remolt.dev</h1>
+        <p className="subtitle">
+          Sandboxed AI coding in your browser.
+          {hasOAuth && <span style={{ marginLeft: '0.5rem', opacity: 0.7 }}>Signed in as <strong>{authUser.login}</strong></span>}
+        </p>
 
         <div className="form-section">
           <h3>Repository (optional)</h3>
@@ -63,9 +73,15 @@ export function SetupForm() {
               onChange={(e) => setRepoUrl(e.target.value)}
               placeholder="https://github.com/user/repo"
             />
-            <span className="form-hint">
-              Run <code>gh auth login</code> in the terminal to authenticate with GitHub for private repos.
-            </span>
+            {hasOAuth ? (
+              <span className="form-hint">
+                Your GitHub token is available in the sandbox for private repo access.
+              </span>
+            ) : (
+              <span className="form-hint">
+                Run <code>gh auth login</code> in the terminal to authenticate with GitHub for private repos.
+              </span>
+            )}
           </div>
         </div>
 
@@ -97,9 +113,14 @@ export function SetupForm() {
           {isLoading ? 'Launching...' : 'Launch Session'}
         </button>
 
-        <a className="source-link" href="https://github.com/nthh/remolt.dev" target="_blank" rel="noopener noreferrer">
-          Source on GitHub
-        </a>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: '1.5rem', marginTop: '1rem' }}>
+          {hasOAuth && (
+            <a href="/auth/logout" style={{ fontSize: '0.85rem', opacity: 0.6 }}>Sign out</a>
+          )}
+          <a className="source-link" href="https://github.com/nthh/remolt.dev" target="_blank" rel="noopener noreferrer">
+            Source on GitHub
+          </a>
+        </div>
       </form>
     </div>
   );

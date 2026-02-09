@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 
-type Phase = 'idle' | 'creating' | 'reconnecting' | 'connected' | 'error';
+type Phase = 'loading' | 'auth_required' | 'idle' | 'creating' | 'reconnecting' | 'connected' | 'error';
 
 const SESSION_KEY = 'remolt:session';
 
@@ -10,11 +10,19 @@ interface SessionInfo {
   ws_url: string;
 }
 
+interface AuthUser {
+  login: string;
+  name: string;
+  email: string;
+  auth_required: boolean;
+}
+
 interface SessionContextType {
   session: SessionInfo | null;
   phase: Phase;
   error: string | null;
   wsUrl: string | null;
+  authUser: AuthUser | null;
   createSession: (params: {
     repoUrl?: string;
     gitUserName?: string;
@@ -27,40 +35,60 @@ const SessionContext = createContext<SessionContextType | null>(null);
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionInfo | null>(null);
-  const [phase, setPhase] = useState<Phase>('idle');
+  const [phase, setPhase] = useState<Phase>('loading');
   const [error, setError] = useState<string | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
 
   const wsUrl = session
     ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${session.ws_url}`
     : null;
 
-  // On mount, check if we have a previous session that's still alive
+  // On mount: check auth, then check for existing session
   useEffect(() => {
-    const saved = localStorage.getItem(SESSION_KEY);
-    if (!saved) return;
+    (async () => {
+      // 1. Check auth status
+      try {
+        const authRes = await fetch('/auth/me');
+        if (authRes.status === 401) {
+          setPhase('auth_required');
+          return;
+        }
+        if (authRes.ok) {
+          const user: AuthUser = await authRes.json();
+          setAuthUser(user);
+        }
+      } catch {
+        // Server unreachable — proceed without auth (local dev)
+      }
 
-    let info: SessionInfo;
-    try {
-      info = JSON.parse(saved);
-    } catch {
-      localStorage.removeItem(SESSION_KEY);
-      return;
-    }
+      // 2. Check for saved session
+      const saved = localStorage.getItem(SESSION_KEY);
+      if (!saved) {
+        setPhase('idle');
+        return;
+      }
 
-    setPhase('reconnecting');
-    fetch(`/api/sessions/${info.session_id}`)
-      .then((res) => {
-        if (!res.ok) throw new Error('gone');
-        return res.json();
-      })
-      .then((data: SessionInfo) => {
-        setSession(data);
-        setPhase('connected');
-      })
-      .catch(() => {
+      let info: SessionInfo;
+      try {
+        info = JSON.parse(saved);
+      } catch {
         localStorage.removeItem(SESSION_KEY);
         setPhase('idle');
-      });
+        return;
+      }
+
+      setPhase('reconnecting');
+      try {
+        const res = await fetch(`/api/sessions/${info.session_id}`);
+        if (!res.ok) throw new Error('gone');
+        const data: SessionInfo = await res.json();
+        setSession(data);
+        setPhase('connected');
+      } catch {
+        localStorage.removeItem(SESSION_KEY);
+        setPhase('idle');
+      }
+    })();
   }, []);
 
   const createSession = useCallback(async (params: {
@@ -108,7 +136,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   return (
-    <SessionContext.Provider value={{ session, phase, error, wsUrl, createSession, destroySession }}>
+    <SessionContext.Provider value={{ session, phase, error, wsUrl, authUser, createSession, destroySession }}>
       {children}
     </SessionContext.Provider>
   );

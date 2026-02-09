@@ -16,12 +16,13 @@ Server (FastAPI, single file, serves SPA + API)
 Sandbox Container/Pod (Ubuntu 24.04 + tmux + Claude Code + git + gh)
 ```
 
-1. User clicks "Launch Session" (optionally enters repo URL, git identity)
-2. Server creates a sandbox (Docker container locally, K8s Pod in production)
-3. Browser connects via WebSocket to a tmux session inside the sandbox
-4. User runs `claude` — authenticates via browser OAuth (auth URL detected and shown as clickable banner)
-5. User runs `gh auth login` — authenticates via browser device flow, then `git push` works
-6. Session auto-destroyed after 1 hour idle (configurable)
+1. User signs in with GitHub (OAuth — optional for local dev, required in production)
+2. User clicks "Launch Session" (optionally enters repo URL, git identity)
+3. Server creates a sandbox (Docker container locally, K8s Pod in production)
+4. GitHub token from OAuth is injected as `GITHUB_TOKEN` — private repo access and `git push` work immediately
+5. Browser connects via WebSocket to a tmux session inside the sandbox
+6. User runs `claude` — authenticates via browser OAuth (auth URL detected and shown as clickable banner)
+7. Session auto-destroyed after 1 hour idle (configurable)
 
 **Runtime auto-detection:** The server checks for a K8s service account at startup. If found, it creates Pods via the K8s API. Otherwise, it uses the Docker API. Same code, no configuration needed.
 
@@ -150,11 +151,13 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ### GitHub Integration
 
-Run `gh auth login` in the terminal to authenticate via browser device flow. Once authenticated:
+When GitHub OAuth is configured, your token is automatically injected into the sandbox as `GITHUB_TOKEN`. This means:
 
-- `gh` CLI works — create PRs, browse issues, manage releases
-- `git push` to any repo your account has access to
-- Provide a repo URL in the launch form to auto-clone into `/home/dev/workspace`
+- `git push` works immediately — no manual auth needed
+- `gh` CLI works out of the box — create PRs, browse issues, manage releases
+- Private repos accessible — provide a repo URL in the launch form to auto-clone into `/home/dev/workspace`
+
+Without OAuth (local dev), run `gh auth login` in the terminal to authenticate via browser device flow.
 
 ---
 
@@ -173,6 +176,13 @@ Environment variables on the server container:
 | `REMOLT_WARM_POOL` | `0` | Number of pre-warmed sandboxes to keep ready |
 | `REMOLT_NAMESPACE` | `remolt` | K8s namespace for sandbox Pods (K8s backend only) |
 | `REMOLT_STATIC_DIR` | _(none)_ | Path to built frontend (`/app/static` in Docker image) |
+| `GITHUB_CLIENT_ID` | _(none)_ | GitHub OAuth App client ID (enables auth gate) |
+| `GITHUB_CLIENT_SECRET` | _(none)_ | GitHub OAuth App client secret |
+| `COOKIE_SECRET` | _(random)_ | HMAC key for signing auth cookies (generate with `openssl rand -hex 32`) |
+
+When `GITHUB_CLIENT_ID` is set, users must sign in with GitHub before creating sessions. The OAuth token is injected into sandboxes as `GITHUB_TOKEN`. Without it, auth is disabled and the app works as before.
+
+**Setup:** Copy `.env.example` to `.env`, fill in values from your [GitHub OAuth App](https://github.com/settings/developers) (callback URL: `https://your-domain/auth/callback`). The server loads `.env` automatically. For K8s, create a secret: `kubectl -n remolt create secret generic remolt-auth --from-env-file=.env`.
 
 ---
 
@@ -307,7 +317,11 @@ experiments/remote-dev/
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Server health + active session count |
-| `POST` | `/api/sessions` | Create session → `{session_id, ws_url}` |
+| `GET` | `/auth/login` | Redirect to GitHub OAuth |
+| `GET` | `/auth/callback` | OAuth callback (sets auth cookie) |
+| `GET` | `/auth/me` | Current user info (or 401) |
+| `POST` | `/auth/logout` | Clear auth cookie |
+| `POST` | `/api/sessions` | Create session → `{session_id, ws_url}` (requires auth if configured) |
 | `GET` | `/api/sessions/{id}` | Check if session is alive |
 | `DELETE` | `/api/sessions/{id}` | Destroy session + container |
 | `WS` | `/ws/terminal/{id}` | Terminal (binary TTY + JSON resize control) |

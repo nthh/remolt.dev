@@ -27,16 +27,29 @@ from enum import Enum
 from pathlib import Path
 from typing import AsyncIterator
 
+import base64
+import hashlib
+import hmac
+
 import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.requests import Request
+from starlette.responses import RedirectResponse
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+
+# Load .env file if present (local dev); no-op in K8s where env is injected
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 SANDBOX_IMAGE = os.getenv("REMOLT_SANDBOX_IMAGE", "remolt-sandbox")
 STATIC_DIR = os.getenv("REMOLT_STATIC_DIR", "")
@@ -45,6 +58,12 @@ CLEANUP_INTERVAL = int(os.getenv("REMOLT_CLEANUP_INTERVAL", "60"))
 MAX_SESSIONS = int(os.getenv("REMOLT_MAX_SESSIONS", "10"))
 WARM_POOL_SIZE = int(os.getenv("REMOLT_WARM_POOL", "0"))
 NAMESPACE = os.getenv("REMOLT_NAMESPACE", "remolt")
+
+# GitHub OAuth
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
+COOKIE_SECRET = os.getenv("COOKIE_SECRET", secrets.token_hex(32))
+AUTH_REQUIRED = bool(GITHUB_CLIENT_ID)
 
 logger = logging.getLogger("remolt")
 logging.basicConfig(
@@ -688,6 +707,161 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+def _sign_cookie(value: str) -> str:
+    sig = hmac.new(COOKIE_SECRET.encode(), value.encode(), hashlib.sha256).hexdigest()[:16]
+    return f"{value}.{sig}"
+
+
+def _verify_cookie(cookie: str) -> str | None:
+    if "." not in cookie:
+        return None
+    value, sig = cookie.rsplit(".", 1)
+    expected = hmac.new(COOKIE_SECRET.encode(), value.encode(), hashlib.sha256).hexdigest()[:16]
+    if hmac.compare_digest(sig, expected):
+        return value
+    return None
+
+
+@dataclass
+class AuthUser:
+    login: str
+    name: str
+    email: str
+    gh_token: str
+
+
+async def get_current_user(request) -> AuthUser | None:
+    """Extract authenticated user from cookie. Returns None if not authed."""
+    if not AUTH_REQUIRED:
+        return None  # Auth disabled, all requests allowed
+    cookie = request.cookies.get("remolt_auth")
+    if not cookie:
+        return None
+    payload = _verify_cookie(cookie)
+    if not payload:
+        return None
+    try:
+        data = _json.loads(base64.b64decode(payload))
+        return AuthUser(**data)
+    except Exception:
+        return None
+
+
+def require_auth(request) -> AuthUser:
+    """Raise 401 if not authenticated."""
+    cookie = request.cookies.get("remolt_auth")
+    if not AUTH_REQUIRED:
+        return AuthUser(login="anonymous", name="", email="", gh_token="")
+    if not cookie:
+        raise HTTPException(401, "Authentication required")
+    payload = _verify_cookie(cookie)
+    if not payload:
+        raise HTTPException(401, "Invalid session")
+    try:
+        data = _json.loads(base64.b64decode(payload))
+        return AuthUser(**data)
+    except Exception:
+        raise HTTPException(401, "Invalid session")
+
+
+# ---------------------------------------------------------------------------
+# Auth endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/auth/login")
+async def auth_login(repo: bool = False):
+    if not GITHUB_CLIENT_ID:
+        raise HTTPException(501, "GitHub OAuth not configured")
+    state = secrets.token_urlsafe(16)
+    scope = "read:user user:email"
+    if repo:
+        scope += " repo"
+    url = (
+        f"https://github.com/login/oauth/authorize"
+        f"?client_id={GITHUB_CLIENT_ID}"
+        f"&scope={scope}"
+        f"&state={state}"
+    )
+    resp = RedirectResponse(url)
+    resp.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600)
+    return resp
+
+
+@app.get("/auth/callback")
+async def auth_callback(request: Request, code: str = "", state: str = ""):
+    if not GITHUB_CLIENT_ID or not GITHUB_CLIENT_SECRET:
+        raise HTTPException(501, "GitHub OAuth not configured")
+
+    saved_state = request.cookies.get("oauth_state")
+    if not saved_state or not hmac.compare_digest(saved_state, state):
+        raise HTTPException(400, "Invalid OAuth state")
+
+    # Exchange code for token
+    async with httpx.AsyncClient() as client:
+        token_resp = await client.post(
+            "https://github.com/login/oauth/access_token",
+            json={
+                "client_id": GITHUB_CLIENT_ID,
+                "client_secret": GITHUB_CLIENT_SECRET,
+                "code": code,
+            },
+            headers={"Accept": "application/json"},
+        )
+        if token_resp.status_code != 200:
+            raise HTTPException(502, "GitHub token exchange failed")
+        token_data = token_resp.json()
+        gh_token = token_data.get("access_token", "")
+        if not gh_token:
+            raise HTTPException(502, f"GitHub OAuth error: {token_data.get('error_description', 'unknown')}")
+
+        # Fetch user info
+        user_resp = await client.get(
+            "https://api.github.com/user",
+            headers={"Authorization": f"Bearer {gh_token}", "Accept": "application/json"},
+        )
+        if user_resp.status_code != 200:
+            raise HTTPException(502, "Failed to fetch GitHub user")
+        user = user_resp.json()
+
+    payload = base64.b64encode(_json.dumps({
+        "login": user.get("login", ""),
+        "name": user.get("name", "") or "",
+        "email": user.get("email", "") or "",
+        "gh_token": gh_token,
+    }).encode()).decode()
+
+    resp = RedirectResponse("/")
+    resp.set_cookie(
+        "remolt_auth", _sign_cookie(payload),
+        httponly=True, samesite="lax", max_age=86400,
+    )
+    resp.delete_cookie("oauth_state")
+    emit("auth.login", login=user.get("login", ""))
+    return resp
+
+
+@app.get("/auth/me")
+async def auth_me(request: Request):
+    user = require_auth(request)
+    return {
+        "login": user.login,
+        "name": user.name,
+        "email": user.email,
+        "auth_required": AUTH_REQUIRED,
+    }
+
+
+@app.post("/auth/logout")
+async def auth_logout():
+    resp = RedirectResponse("/", status_code=303)
+    resp.delete_cookie("remolt_auth")
+    return resp
+
+
+# ---------------------------------------------------------------------------
 # REST endpoints
 # ---------------------------------------------------------------------------
 
@@ -696,6 +870,8 @@ class CreateSessionReq(BaseModel):
     repo_url: str | None = None
     git_user_name: str | None = None
     git_user_email: str | None = None
+    api_key: str | None = None
+    github_token: str | None = None
 
 
 class SessionResp(BaseModel):
@@ -710,7 +886,9 @@ async def health():
 
 
 @app.post("/api/sessions", response_model=SessionResp)
-async def api_create_session(body: CreateSessionReq):
+async def api_create_session(request: Request, body: CreateSessionReq):
+    user = require_auth(request)
+
     if len(sessions) >= MAX_SESSIONS:
         raise HTTPException(429, "Max sessions reached")
 
@@ -720,8 +898,18 @@ async def api_create_session(body: CreateSessionReq):
         env["REPO_URL"] = body.repo_url
     if body.git_user_name:
         env["GIT_USER_NAME"] = body.git_user_name
+    elif user.name:
+        env["GIT_USER_NAME"] = user.name
     if body.git_user_email:
         env["GIT_USER_EMAIL"] = body.git_user_email
+    elif user.email:
+        env["GIT_USER_EMAIL"] = user.email
+    # Inject GitHub token: prefer OAuth token, fall back to manually-provided PAT
+    gh_token = user.gh_token or body.github_token
+    if gh_token:
+        env["GITHUB_TOKEN"] = gh_token
+    if body.api_key:
+        env["ANTHROPIC_API_KEY"] = body.api_key
 
     try:
         sandbox_id = await claim_warm_sandbox(env)
@@ -737,7 +925,7 @@ async def api_create_session(body: CreateSessionReq):
         status=Status.RUNNING,
         has_repo=bool(body.repo_url),
     )
-    emit("session.created", session_id=sid, has_repo=bool(body.repo_url))
+    emit("session.created", session_id=sid, has_repo=bool(body.repo_url), user=user.login)
     save_sessions()
     return SessionResp(session_id=sid, status="running", ws_url=f"/ws/terminal/{sid}")
 

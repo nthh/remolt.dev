@@ -31,6 +31,10 @@ spec:
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: remolt-auth
+                optional: true
           env:
             - name: REMOLT_SANDBOX_IMAGE
               value: ghcr.io/nthh/remolt-sandbox:latest
