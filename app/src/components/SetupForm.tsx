@@ -24,7 +24,6 @@ function savePrefs(p: Partial<Prefs>) {
 
 export function SetupForm() {
   const { createSession, phase, error } = useSession();
-  const [apiKey, setApiKey] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
   const [gitUserName, setGitUserName] = useState('');
   const [gitUserEmail, setGitUserEmail] = useState('');
@@ -40,7 +39,6 @@ export function SetupForm() {
     e.preventDefault();
     savePrefs({ repoUrl, gitUserName, gitUserEmail });
     createSession({
-      apiKey: apiKey || undefined,
       repoUrl: repoUrl || undefined,
       gitUserName: gitUserName || undefined,
       gitUserEmail: gitUserEmail || undefined,
@@ -55,21 +53,8 @@ export function SetupForm() {
         <h1>Remolt</h1>
         <p className="subtitle">Sandboxed AI coding sessions in your browser.</p>
 
-        <div className="form-group">
-          <label>Anthropic API Key</label>
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="sk-ant-... (or leave blank to log in interactively)"
-          />
-          <span className="form-hint">
-            Optional. Without a key, run <code>claude</code> in the terminal and log in via browser.
-          </span>
-        </div>
-
         <div className="form-section">
-          <h3>GitHub (optional)</h3>
+          <h3>Repository (optional)</h3>
           <div className="form-group">
             <label>Repository URL</label>
             <input

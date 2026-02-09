@@ -16,7 +16,6 @@ interface SessionContextType {
   error: string | null;
   wsUrl: string | null;
   createSession: (params: {
-    apiKey?: string;
     repoUrl?: string;
     gitUserName?: string;
     gitUserEmail?: string;
@@ -65,7 +64,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const createSession = useCallback(async (params: {
-    apiKey?: string;
     repoUrl?: string;
     gitUserName?: string;
     gitUserEmail?: string;
@@ -77,7 +75,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          api_key: params.apiKey || null,
           repo_url: params.repoUrl || null,
           git_user_name: params.gitUserName || null,
           git_user_email: params.gitUserEmail || null,

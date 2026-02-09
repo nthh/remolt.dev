@@ -161,7 +161,7 @@ def test_health(client):
 
 
 def test_create_session(client, fake_backend):
-    resp = client.post("/api/sessions", json={"api_key": "sk-test"})
+    resp = client.post("/api/sessions", json={})
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "running"
@@ -378,12 +378,12 @@ async def test_claim_warm_sandbox(fake_backend):
     assert srv.warm_pool.qsize() == 1
 
     # Claim it
-    claimed = await srv.claim_warm_sandbox({"ANTHROPIC_API_KEY": "sk-test"})
+    claimed = await srv.claim_warm_sandbox({"REPO_URL": "https://github.com/test/repo"})
     assert claimed == sandbox_id
     assert srv.warm_pool.qsize() == 0
     # Env should have been injected
     sb = fake_backend.sandboxes[sandbox_id]
-    assert sb["env"]["ANTHROPIC_API_KEY"] == "sk-test"
+    assert sb["env"]["REPO_URL"] == "https://github.com/test/repo"
     assert sb["env_injected"] is True
 
 
@@ -416,7 +416,7 @@ async def test_create_session_uses_warm_pool(fake_backend):
     # Create session via API
     from fastapi.testclient import TestClient
     client = TestClient(srv.app, raise_server_exceptions=False)
-    resp = client.post("/api/sessions", json={"api_key": "sk-warm"})
+    resp = client.post("/api/sessions", json={})
     assert resp.status_code == 200
 
     # Should have claimed from pool, not created a new one

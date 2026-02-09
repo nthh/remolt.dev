@@ -691,7 +691,6 @@ app.add_middleware(
 
 
 class CreateSessionReq(BaseModel):
-    api_key: str | None = None
     repo_url: str | None = None
     git_user_name: str | None = None
     git_user_email: str | None = None
@@ -715,8 +714,6 @@ async def api_create_session(body: CreateSessionReq):
 
     sid = secrets.token_urlsafe(32)
     env: dict[str, str] = {"TERM": "xterm-256color"}
-    if body.api_key:
-        env["ANTHROPIC_API_KEY"] = body.api_key
     if body.repo_url:
         env["REPO_URL"] = body.repo_url
     if body.git_user_name:

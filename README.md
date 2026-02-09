@@ -16,16 +16,16 @@ Server (FastAPI, single file, serves SPA + API)
 Sandbox Container/Pod (Ubuntu 24.04 + tmux + Claude Code + git + gh)
 ```
 
-1. User clicks "Launch Session" (optionally enters API key, repo URL)
+1. User clicks "Launch Session" (optionally enters repo URL, git identity)
 2. Server creates a sandbox (Docker container locally, K8s Pod in production)
 3. Browser connects via WebSocket to a tmux session inside the sandbox
-4. User runs `claude` — authenticates via browser OAuth (or uses a pre-set API key)
+4. User runs `claude` — authenticates via browser OAuth (auth URL detected and shown as clickable banner)
 5. User runs `gh auth login` — authenticates via browser device flow, then `git push` works
 6. Session auto-destroyed after 1 hour idle (configurable)
 
 **Runtime auto-detection:** The server checks for a K8s service account at startup. If found, it creates Pods via the K8s API. Otherwise, it uses the Docker API. Same code, no configuration needed.
 
-**No API key required.** Claude Code supports interactive login — run `claude` in the terminal and it shows a URL to visit in your browser. Alternatively, provide an `ANTHROPIC_API_KEY` in the form for headless use.
+**No API key needed.** Claude Code supports interactive OAuth — run `claude` in the terminal, and the auth URL is automatically detected and shown as a clickable banner above the terminal.
 
 ---
 
@@ -87,7 +87,7 @@ Three mechanisms make sessions durable:
 | Analytics events | `/data/events.jsonl` (mounted volume) | Indefinite (append-only) |
 | Container state | Docker | Until session ends or idle timeout |
 
-**The server never stores API keys or tokens on disk.** They exist only in the container's environment variables and are destroyed with the container.
+**The server never stores credentials on disk.** OAuth tokens live inside the container and are destroyed with it.
 
 ### Browser-side
 
@@ -95,9 +95,8 @@ Three mechanisms make sessions durable:
 |------|-------|----------|
 | Session ID | `localStorage` (`remolt:session`) | Until session ends |
 | Preferences | `localStorage` (`remolt:prefs`) | Indefinite |
-| API key | Not stored | Entered each browser session |
 
-Preferences include repo URL, git name, and git email — convenience fields so you don't re-type them. API keys are never written to storage.
+Preferences include repo URL, git name, and git email — convenience fields so you don't re-type them.
 
 ### Analytics Events
 
@@ -258,14 +257,14 @@ Put a reverse proxy (Caddy, nginx) in front for HTTPS.
 
 ### Credentials
 
-- API keys are container env vars — never written to server disk
+- OAuth tokens live inside the container — never written to server disk
 - GitHub auth state lives inside the container (via `gh auth login`)
 - All credentials destroyed when the container is removed
 - Browser stores only session ID and non-secret preferences
 
 ### Threat Model
 
-Remolt is for **trusted users with their own API keys**. It is not a multi-tenant platform. If deploying publicly:
+Remolt is for **trusted users**. It is not a multi-tenant platform. If deploying publicly:
 
 - Users can run arbitrary code (by design — it's a dev environment)
 - Mitigate resource abuse with `REMOLT_MAX_SESSIONS` and K8s resource limits
