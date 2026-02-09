@@ -12,16 +12,18 @@ Sandboxed AI coding sessions in your browser. Launch a full Linux terminal with 
 Browser (React + xterm.js)
     ↕ WebSocket (binary TTY I/O + JSON control frames)
 Server (FastAPI, single file, serves SPA + API)
-    ↕ Docker API (aiodocker)
-Sandbox Container (Ubuntu 24.04 + tmux + Claude Code + git + gh)
+    ↕ Docker API (local) or K8s API (production)
+Sandbox Container/Pod (Ubuntu 24.04 + tmux + Claude Code + git + gh)
 ```
 
 1. User clicks "Launch Session" (optionally enters API key, repo URL)
-2. Server creates a Docker container from the sandbox image
-3. Browser connects via WebSocket to a tmux session inside the container
+2. Server creates a sandbox (Docker container locally, K8s Pod in production)
+3. Browser connects via WebSocket to a tmux session inside the sandbox
 4. User runs `claude` — authenticates via browser OAuth (or uses a pre-set API key)
 5. User runs `gh auth login` — authenticates via browser device flow, then `git push` works
 6. Session auto-destroyed after 1 hour idle (configurable)
+
+**Runtime auto-detection:** The server checks for a K8s service account at startup. If found, it creates Pods via the K8s API. Otherwise, it uses the Docker API. Same code, no configuration needed.
 
 **No API key required.** Claude Code supports interactive login — run `claude` in the terminal and it shows a URL to visit in your browser. Alternatively, provide an `ANTHROPIC_API_KEY` in the form for headless use.
 
@@ -61,7 +63,7 @@ Three mechanisms make sessions durable:
 
 **Auto-reconnect** — If the WebSocket drops (network blip, server restart), the browser retries with exponential backoff (1s → 2s → 4s → 8s → 16s, max 5 attempts). Combined with tmux, brief outages are invisible.
 
-**Session persistence** — The server writes session metadata to disk (`sessions.json`). On restart, it scans Docker for containers labeled `remolt.managed=true`, reconciles with the saved metadata, and reclaims running sessions.
+**Session persistence** — The server writes session metadata to disk (`sessions.json`). On restart, it scans for sandboxes labeled `remolt.managed=true` (Docker containers or K8s Pods), reconciles with the saved metadata, and reclaims running sessions.
 
 ### What Survives What
 
@@ -169,6 +171,8 @@ Environment variables on the server container:
 | `REMOLT_CLEANUP_INTERVAL` | `60` | Seconds between idle-check sweeps |
 | `REMOLT_EVENTS_LOG` | _(none)_ | File path for durable analytics |
 | `REMOLT_SESSIONS_FILE` | _(none)_ | File path for session persistence |
+| `REMOLT_WARM_POOL` | `0` | Number of pre-warmed sandboxes to keep ready |
+| `REMOLT_NAMESPACE` | `remolt` | K8s namespace for sandbox Pods (K8s backend only) |
 | `REMOLT_STATIC_DIR` | _(none)_ | Path to built frontend (`/app/static` in Docker image) |
 
 ---
@@ -180,7 +184,7 @@ For local iteration without Docker rebuilds:
 ```bash
 # Terminal 1: server (needs Docker running for sandbox containers)
 cd server
-pip install fastapi uvicorn[standard] aiodocker
+pip install fastapi uvicorn[standard] aiodocker httpx websockets
 uvicorn server:app --port 8080 --reload
 
 # Terminal 2: frontend (hot-reload, proxies /api and /ws to server)
@@ -245,12 +249,12 @@ Put a reverse proxy (Caddy, nginx) in front for HTTPS.
 
 ### Isolation
 
-- Each session is an isolated container with no shared filesystem
-- Each container gets its own Docker bridge network (`remolt-net-{id}`), preventing container-to-container traffic while preserving internet access via NAT
+- Each session is an isolated container/pod with no shared filesystem
+- **Docker:** Each container gets its own bridge network (`remolt-net-{id}`), preventing container-to-container traffic
+- **K8s:** NetworkPolicy denies pod-to-pod traffic between sandbox pods
 - Containers run as non-root user `dev` (with sudo for convenience)
 - No access to host network, other containers, or server filesystem
-- Server communicates with containers only via Docker exec API
-- In K8s, a NetworkPolicy denies pod-to-pod traffic between sandbox pods
+- Server communicates with sandboxes only via exec API (Docker exec or K8s exec)
 
 ### Credentials
 

@@ -43,6 +43,7 @@ STATIC_DIR = os.getenv("REMOLT_STATIC_DIR", "")
 MAX_IDLE_SECONDS = int(os.getenv("REMOLT_MAX_IDLE_SECONDS", "3600"))
 CLEANUP_INTERVAL = int(os.getenv("REMOLT_CLEANUP_INTERVAL", "60"))
 MAX_SESSIONS = int(os.getenv("REMOLT_MAX_SESSIONS", "10"))
+WARM_POOL_SIZE = int(os.getenv("REMOLT_WARM_POOL", "0"))
 NAMESPACE = os.getenv("REMOLT_NAMESPACE", "remolt")
 
 logger = logging.getLogger("remolt")
@@ -125,6 +126,7 @@ class Session:
 
 
 sessions: dict[str, Session] = {}
+warm_pool: asyncio.Queue[str] = asyncio.Queue()  # sandbox_ids ready to claim
 
 # ---------------------------------------------------------------------------
 # Sandbox backend protocol
@@ -169,6 +171,10 @@ class SandboxBackend(abc.ABC):
     @abc.abstractmethod
     async def exec_attach(self, sandbox_id: str) -> ExecStream:
         """Attach to sandbox with TTY. Returns an ExecStream."""
+
+    @abc.abstractmethod
+    async def inject_env(self, sandbox_id: str, env: dict[str, str]) -> None:
+        """Inject environment variables into a running sandbox and run setup."""
 
     @abc.abstractmethod
     async def close(self) -> None:
@@ -284,6 +290,25 @@ class DockerBackend(SandboxBackend):
         stream = exec_inst.start(detach=False)
         await stream._init()
         return DockerExecStream(stream, exec_id, self._docker)
+
+    async def inject_env(self, sandbox_id: str, env: dict[str, str]) -> None:
+        container = self._docker.containers.container(sandbox_id)
+        # Write env vars to a profile file, then run entrypoint setup
+        lines = [f"export {k}={v}" for k, v in env.items()]
+        script = " && ".join([
+            f"echo '{chr(10).join(lines)}' > /home/dev/.remolt_env",
+            "echo 'source /home/dev/.remolt_env 2>/dev/null' >> /home/dev/.bashrc",
+            "source /home/dev/.remolt_env",
+            # Re-run entrypoint logic (git config + clone)
+            'git config --global user.name "${GIT_USER_NAME:-Claude Dev}"',
+            'git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"',
+            'if [ -n "$REPO_URL" ]; then git clone "$REPO_URL" /home/dev/workspace 2>/dev/null || true; fi',
+        ])
+        exec_inst = await container.exec(
+            cmd=["bash", "-c", script],
+            environment=env,
+        )
+        await exec_inst.start(detach=True)
 
     async def close(self) -> None:
         await self._docker.close()
@@ -466,6 +491,36 @@ class K8sBackend(SandboxBackend):
         )
         return K8sExecStream(ws)
 
+    async def inject_env(self, sandbox_id: str, env: dict[str, str]) -> None:
+        import websockets
+        from urllib.parse import quote
+
+        lines = "\n".join(f"export {k}={v}" for k, v in env.items())
+        script = (
+            f"echo '{lines}' > /home/dev/.remolt_env"
+            " && echo 'source /home/dev/.remolt_env 2>/dev/null' >> /home/dev/.bashrc"
+            " && source /home/dev/.remolt_env"
+            ' && git config --global user.name "${GIT_USER_NAME:-Claude Dev}"'
+            ' && git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"'
+            ' && if [ -n "$REPO_URL" ]; then git clone "$REPO_URL" /home/dev/workspace 2>/dev/null || true; fi'
+        )
+        params = f"command=bash&command=-c&command={quote(script)}&stderr=true&stdout=true"
+        url = (
+            f"wss://kubernetes.default.svc"
+            f"/api/v1/namespaces/{self._namespace}/pods/{sandbox_id}"
+            f"/exec?container=sandbox&{params}"
+        )
+        token = (K8S_SA_PATH / "token").read_text().strip()
+        async with websockets.connect(
+            url,
+            additional_headers={"Authorization": f"Bearer {token}"},
+            ssl=self._ssl_ctx,
+            subprotocols=["v4.channel.k8s.io"],
+        ) as ws:
+            # Wait for exec to complete
+            async for frame in ws:
+                pass
+
     async def close(self) -> None:
         await self._client.aclose()
 
@@ -540,6 +595,42 @@ async def cleanup_loop() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Warm pool
+# ---------------------------------------------------------------------------
+
+
+async def warm_pool_loop() -> None:
+    """Keep WARM_POOL_SIZE idle sandboxes ready for instant session creation."""
+    if WARM_POOL_SIZE <= 0:
+        return
+    while True:
+        deficit = WARM_POOL_SIZE - warm_pool.qsize()
+        for _ in range(deficit):
+            try:
+                pool_id = secrets.token_urlsafe(8)
+                sandbox_id = await backend.create(f"warm-{pool_id}", {"TERM": "xterm-256color"})
+                warm_pool.put_nowait(sandbox_id)
+                logger.info(f"Warm pool: created {sandbox_id} (pool size: {warm_pool.qsize()})")
+                emit("warm_pool.created", sandbox_id=sandbox_id, pool_size=warm_pool.qsize())
+            except Exception as e:
+                logger.warning(f"Warm pool: failed to create sandbox: {e}")
+                break
+        await asyncio.sleep(5)
+
+
+async def claim_warm_sandbox(env: dict[str, str]) -> str | None:
+    """Try to claim a pre-warmed sandbox. Returns sandbox_id or None."""
+    try:
+        sandbox_id = warm_pool.get_nowait()
+        await backend.inject_env(sandbox_id, env)
+        logger.info(f"Claimed warm sandbox {sandbox_id} (pool size: {warm_pool.qsize()})")
+        emit("warm_pool.claimed", sandbox_id=sandbox_id, pool_size=warm_pool.qsize())
+        return sandbox_id
+    except asyncio.QueueEmpty:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
 
@@ -555,12 +646,21 @@ async def lifespan(app: FastAPI):
         logger.info("Using Docker backend (local)")
 
     await recover_sessions()
-    task = asyncio.create_task(cleanup_loop())
+    cleanup_task = asyncio.create_task(cleanup_loop())
+    warm_task = asyncio.create_task(warm_pool_loop())
     logger.info("Remolt server started")
     emit("server.started", max_sessions=MAX_SESSIONS, max_idle_s=MAX_IDLE_SECONDS,
-         backend="k8s" if _in_cluster() else "docker")
+         backend="k8s" if _in_cluster() else "docker", warm_pool=WARM_POOL_SIZE)
     yield
-    task.cancel()
+    cleanup_task.cancel()
+    warm_task.cancel()
+    # Drain warm pool
+    while not warm_pool.empty():
+        try:
+            sandbox_id = warm_pool.get_nowait()
+            await backend.destroy(sandbox_id)
+        except Exception:
+            pass
     for sid in list(sessions):
         s = sessions.pop(sid, None)
         if s:
@@ -625,7 +725,9 @@ async def api_create_session(body: CreateSessionReq):
         env["GIT_USER_EMAIL"] = body.git_user_email
 
     try:
-        sandbox_id = await backend.create(sid, env)
+        sandbox_id = await claim_warm_sandbox(env)
+        if not sandbox_id:
+            sandbox_id = await backend.create(sid, env)
     except Exception as e:
         raise HTTPException(500, f"Failed to create sandbox: {e}")
 
