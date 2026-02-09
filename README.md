@@ -1,9 +1,8 @@
-# Remolt
+# [remolt.dev](https://remolt.dev)
 
 Sandboxed AI coding sessions in your browser. Launch a full Linux terminal with Claude Code, Aider, or any AI coding CLI — authenticate interactively, push commits directly from the session.
 
-**Live:** [remolt.dev](https://remolt.dev)
-**License:** Apache 2.0
+**License:** [MIT](LICENSE)
 
 ---
 
