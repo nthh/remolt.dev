@@ -509,6 +509,7 @@ class K8sBackend(SandboxBackend):
             additional_headers={"Authorization": f"Bearer {token}"},
             ssl=self._ssl_ctx,
             subprotocols=["v4.channel.k8s.io"],
+            proxy=None,
         )
         return K8sExecStream(ws)
 
@@ -537,6 +538,7 @@ class K8sBackend(SandboxBackend):
             additional_headers={"Authorization": f"Bearer {token}"},
             ssl=self._ssl_ctx,
             subprotocols=["v4.channel.k8s.io"],
+            proxy=None,
         ) as ws:
             # Wait for exec to complete
             async for frame in ws:
