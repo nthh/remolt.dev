@@ -97,6 +97,10 @@ jobs:
           echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > /tmp/kubeconfig
           echo "KUBECONFIG=/tmp/kubeconfig" >> "$GITHUB_ENV"
 
+      - uses: actions/checkout@v4
+
+      - run: kubectl apply -f k8s/
+
       - run: |
           if [[ "${{ needs.changes.outputs.server }}" == "true" ]] || [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             kubectl -n remolt set image deployment/remolt-server \

@@ -1,10 +1,16 @@
 apiVersion: v1
-kind: Secret
+kind: ConfigMap
 metadata:
-  name: cloudflared-token
+  name: cloudflared-config
   namespace: remolt
-stringData:
-  token: REPLACE_ME  # terraform output -raw tunnel_token
+data:
+  config.yaml: |
+    tunnel: c3724717-cb58-4b55-84cc-f933516bcef4
+    no-autoupdate: true
+    ingress:
+      - hostname: remolt.dev
+        service: http://remolt-server:8080
+      - service: http_status:404
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -26,16 +32,20 @@ spec:
           image: cloudflare/cloudflared:latest
           args:
             - tunnel
-            - --no-autoupdate
+            - --config
+            - /etc/cloudflared/config.yaml
+            - --credentials-file
+            - /etc/cloudflared/credentials.json
             - run
-            - --token
-            - $(TUNNEL_TOKEN)
-          env:
-            - name: TUNNEL_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: cloudflared-token
-                  key: token
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cloudflared/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: creds
+              mountPath: /etc/cloudflared/credentials.json
+              subPath: credentials.json
+              readOnly: true
           resources:
             requests:
               cpu: 50m
@@ -43,3 +53,10 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: cloudflared-config
+        - name: creds
+          secret:
+            secretName: cloudflared-creds
