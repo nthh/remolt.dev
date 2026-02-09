@@ -186,7 +186,7 @@ export function useTerminal(wsUrl: string | null) {
     try {
       const text = await navigator.clipboard.readText();
       if (text && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(new TextEncoder().encode(text));
+        wsRef.current.send(new TextEncoder().encode(text.trim() + '\n'));
       }
       termRef.current?.focus();
     } catch {
