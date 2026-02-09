@@ -4,8 +4,9 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 
-const MAX_RECONNECT_ATTEMPTS = 5;
+const MAX_RECONNECT_ATTEMPTS = 15;
 const RECONNECT_BASE_MS = 1000;
+const MAX_RECONNECT_DELAY_MS = 5000;
 const URL_REGEX = /https?:\/\/[^\s\x1b\x00-\x1f]{20,}/g;
 
 export function useTerminal(wsUrl: string | null) {
@@ -95,6 +96,7 @@ export function useTerminal(wsUrl: string | null) {
     let attempts = 0;
     let intentionalClose = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let everConnected = false;
 
     function connect() {
       ws = new WebSocket(url);
@@ -102,10 +104,12 @@ export function useTerminal(wsUrl: string | null) {
       wsRef.current = ws;
 
       ws.onopen = () => {
+        const wasReconnect = everConnected;
+        everConnected = true;
         attempts = 0;
-        term.writeln(attempts === 0
-          ? '\x1b[32m● Connected\x1b[0m\r'
-          : '\x1b[32m● Reconnected\x1b[0m\r');
+        term.writeln(wasReconnect
+          ? '\x1b[32m● Reconnected\x1b[0m\r'
+          : '\x1b[32m● Connected\x1b[0m\r');
         const dims = fit.proposeDimensions();
         if (dims) {
           ws!.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
@@ -123,8 +127,15 @@ export function useTerminal(wsUrl: string | null) {
       ws.onclose = () => {
         if (intentionalClose) return;
         if (attempts < MAX_RECONNECT_ATTEMPTS) {
-          const delay = RECONNECT_BASE_MS * Math.pow(2, attempts);
-          term.writeln(`\r\n\x1b[33m● Connection lost. Reconnecting in ${delay / 1000}s...\x1b[0m`);
+          // Short fixed delay while waiting for sandbox, exponential backoff after connected
+          const delay = everConnected
+            ? Math.min(RECONNECT_BASE_MS * Math.pow(2, attempts), MAX_RECONNECT_DELAY_MS)
+            : Math.min(2000, RECONNECT_BASE_MS * (attempts + 1));
+          if (everConnected) {
+            term.writeln(`\r\n\x1b[33m● Connection lost. Reconnecting in ${delay / 1000}s...\x1b[0m`);
+          } else {
+            term.writeln(`\x1b[33m● Waiting for sandbox... (${attempts + 1}/${MAX_RECONNECT_ATTEMPTS})\x1b[0m\r`);
+          }
           attempts++;
           reconnectTimer = setTimeout(connect, delay);
         } else {

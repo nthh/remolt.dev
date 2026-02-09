@@ -178,6 +178,8 @@ html, body, #root {
   border: 1px solid var(--red);
   padding: 6px 16px;
   font-size: 13px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .btn-danger:hover {
@@ -212,12 +214,18 @@ html, body, #root {
   align-items: center;
   gap: 8px;
   font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .terminal-header .session-id {
   color: var(--fg-muted);
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
 }
 
 .status-dot {

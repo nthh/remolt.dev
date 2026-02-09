@@ -1,4 +1,4 @@
-import { useState, useEffect, type FormEvent } from 'react';
+import { useState, useEffect, useRef, type FormEvent } from 'react';
 import { useSession } from '../contexts/SessionContext';
 
 const PREFS_KEY = 'remolt:prefs';
@@ -23,7 +23,8 @@ function savePrefs(p: Partial<Prefs>) {
 }
 
 export function SetupForm() {
-  const { createSession, phase, error, authUser } = useSession();
+  const { createSession, phase, error, authUser, autoLaunch } = useSession();
+  const didAutoLaunch = useRef(false);
   const [repoUrl, setRepoUrl] = useState('');
   const [gitUserName, setGitUserName] = useState('');
   const [gitUserEmail, setGitUserEmail] = useState('');
@@ -41,6 +42,19 @@ export function SetupForm() {
     if (p.gitUserName) setGitUserName(p.gitUserName);
     if (p.gitUserEmail) setGitUserEmail(p.gitUserEmail);
   }, []);
+
+  // Auto-launch session after OAuth redirect
+  useEffect(() => {
+    if (autoLaunch && !didAutoLaunch.current && phase === 'idle') {
+      didAutoLaunch.current = true;
+      const p = loadPrefs();
+      createSession({
+        repoUrl: p.repoUrl || undefined,
+        gitUserName: p.gitUserName || undefined,
+        gitUserEmail: p.gitUserEmail || undefined,
+      });
+    }
+  }, [autoLaunch, phase, createSession]);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();

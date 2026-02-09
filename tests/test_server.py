@@ -604,7 +604,7 @@ def test_auth_login_returns_501_when_not_configured(client):
 
 
 def test_auth_logout_clears_cookie(client):
-    resp = client.post("/auth/logout", follow_redirects=False)
+    resp = client.get("/auth/logout", follow_redirects=False)
     assert resp.status_code == 303
     # Cookie should be deleted
     set_cookie = resp.headers.get("set-cookie", "")

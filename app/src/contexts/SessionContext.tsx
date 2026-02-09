@@ -23,6 +23,7 @@ interface SessionContextType {
   error: string | null;
   wsUrl: string | null;
   authUser: AuthUser | null;
+  autoLaunch: boolean;
   createSession: (params: {
     repoUrl?: string;
     gitUserName?: string;
@@ -38,6 +39,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<Phase>('loading');
   const [error, setError] = useState<string | null>(null);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [autoLaunch, setAutoLaunch] = useState(false);
 
   const wsUrl = session
     ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${session.ws_url}`
@@ -61,7 +63,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // Server unreachable — proceed without auth (local dev)
       }
 
-      // 2. Check for saved session
+      // 2. Auto-launch after OAuth redirect
+      const params = new URLSearchParams(location.search);
+      if (params.has('authed')) {
+        history.replaceState(null, '', '/');
+        setAutoLaunch(true);
+        setPhase('idle');
+        return;
+      }
+
+      // 3. Check for saved session
       const saved = localStorage.getItem(SESSION_KEY);
       if (!saved) {
         setPhase('idle');
@@ -136,7 +147,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   return (
-    <SessionContext.Provider value={{ session, phase, error, wsUrl, authUser, createSession, destroySession }}>
+    <SessionContext.Provider value={{ session, phase, error, wsUrl, authUser, autoLaunch, createSession, destroySession }}>
       {children}
     </SessionContext.Provider>
   );

@@ -826,14 +826,27 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
             raise HTTPException(502, "Failed to fetch GitHub user")
         user = user_resp.json()
 
+        # Email may be private — fetch from /user/emails
+        email = user.get("email", "") or ""
+        if not email:
+            emails_resp = await client.get(
+                "https://api.github.com/user/emails",
+                headers={"Authorization": f"Bearer {gh_token}", "Accept": "application/json"},
+            )
+            if emails_resp.status_code == 200:
+                for e in emails_resp.json():
+                    if e.get("primary") and e.get("verified"):
+                        email = e.get("email", "")
+                        break
+
     payload = base64.b64encode(_json.dumps({
         "login": user.get("login", ""),
         "name": user.get("name", "") or "",
-        "email": user.get("email", "") or "",
+        "email": email,
         "gh_token": gh_token,
     }).encode()).decode()
 
-    resp = RedirectResponse("/")
+    resp = RedirectResponse("/?authed=1")
     resp.set_cookie(
         "remolt_auth", _sign_cookie(payload),
         httponly=True, samesite="lax", max_age=86400,
@@ -854,7 +867,7 @@ async def auth_me(request: Request):
     }
 
 
-@app.post("/auth/logout")
+@app.get("/auth/logout")
 async def auth_logout():
     resp = RedirectResponse("/", status_code=303)
     resp.delete_cookie("remolt_auth")
@@ -967,12 +980,20 @@ async def ws_terminal(ws: WebSocket, session_id: str):
     await ws.accept()
     assert backend is not None
 
-    try:
-        stream = await backend.exec_attach(s.sandbox_id)
-    except Exception as e:
-        logger.error(f"Session {session_id}: exec_attach failed: {e}")
-        await ws.close(code=4005, reason="Failed to attach to sandbox")
-        return
+    # Retry exec_attach — sandbox may still be starting
+    stream = None
+    for attempt in range(10):
+        try:
+            stream = await backend.exec_attach(s.sandbox_id)
+            break
+        except Exception as e:
+            if attempt < 9:
+                logger.info(f"Session {session_id}: exec_attach attempt {attempt + 1}/10 failed: {e}")
+                await asyncio.sleep(2)
+            else:
+                logger.error(f"Session {session_id}: exec_attach failed after 10 attempts: {e}")
+                await ws.close(code=4005, reason="Failed to attach to sandbox")
+                return
 
     emit("terminal.connected", session_id=session_id)
 
