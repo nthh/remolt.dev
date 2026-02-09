@@ -1,0 +1,6 @@
+vultr_api_key = "YOUR_API_KEY"
+environment   = "dev"
+region        = "ewr"
+node_plan     = "vc2-2c-4gb"
+node_count    = 2
+node_max      = 5

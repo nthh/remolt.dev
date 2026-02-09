@@ -1,0 +1,21 @@
+#!/bin/bash
+set -e
+
+# GitHub auth
+if [ -n "$GITHUB_TOKEN" ]; then
+    echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null || true
+    echo "GitHub CLI authenticated"
+fi
+
+# Git config
+git config --global user.name "${GIT_USER_NAME:-Claude Dev}"
+git config --global user.email "${GIT_USER_EMAIL:-claude@folia.sh}"
+
+# Clone repo if specified
+if [ -n "$REPO_URL" ]; then
+    git clone "$REPO_URL" /home/dev/workspace 2>/dev/null || echo "Clone failed or repo already exists"
+fi
+
+# Keep container alive — interactive shells come via docker exec
+echo "Remolt sandbox ready"
+exec sleep infinity

@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+app/dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Terraform
+.infra/.terraform/
+.infra/.terraform.lock.hcl
+.infra/*.tfstate
+.infra/*.tfstate.backup
+.infra/terraform.tfvars
+.infra/*.auto.tfvars
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Secrets
+.env
+*.pem
+kubeconfig.yaml
