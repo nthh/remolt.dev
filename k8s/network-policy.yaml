@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-sandbox-to-sandbox
+  namespace: remolt
+spec:
+  podSelector:
+    matchLabels:
+      app: remolt-sandbox
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow traffic only from the server pod, deny all sandbox-to-sandbox
+    - from:
+        - podSelector:
+            matchLabels:
+              app: remolt-server

@@ -6,6 +6,10 @@ terraform {
       source  = "vultr/vultr"
       version = "~> 2.21"
     }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.5"
+    }
   }
 }
 
@@ -30,11 +34,3 @@ resource "vultr_kubernetes" "remolt" {
   }
 }
 
-# --- Container Registry ---
-
-resource "vultr_container_registry" "remolt" {
-  name   = "remolt-${var.environment}"
-  region = var.region
-  plan   = "start_up"
-  public = false
-}

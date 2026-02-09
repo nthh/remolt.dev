@@ -19,7 +19,7 @@ variable "region" {
 variable "k8s_version" {
   description = "Kubernetes version"
   type        = string
-  default     = "v1.31.0+1"
+  default     = "v1.32.9+3"
 }
 
 variable "node_plan" {

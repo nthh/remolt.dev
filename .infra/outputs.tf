@@ -6,6 +6,7 @@ output "cluster_id" {
 output "cluster_endpoint" {
   description = "Kubernetes API endpoint"
   value       = vultr_kubernetes.remolt.endpoint
+  sensitive   = true
 }
 
 output "kubeconfig" {
@@ -14,15 +15,8 @@ output "kubeconfig" {
   sensitive   = true
 }
 
-output "registry_urn" {
-  description = "Container registry URN for docker login"
-  value       = vultr_container_registry.remolt.urn
-}
-
-output "registry_root_uri" {
-  description = "Registry URI for image tagging"
-  value = join("/", [
-    "${vultr_container_registry.remolt.storage.0.region.0.name}.vultrcr.com",
-    vultr_container_registry.remolt.name,
-  ])
+resource "local_file" "kubeconfig" {
+  content         = base64decode(vultr_kubernetes.remolt.kube_config)
+  filename        = "${path.module}/kubeconfig-${var.environment}.yaml"
+  file_permission = "0600"
 }

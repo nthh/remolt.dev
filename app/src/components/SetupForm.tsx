@@ -25,7 +25,6 @@ function savePrefs(p: Partial<Prefs>) {
 export function SetupForm() {
   const { createSession, phase, error } = useSession();
   const [apiKey, setApiKey] = useState('');
-  const [githubToken, setGithubToken] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
   const [gitUserName, setGitUserName] = useState('');
   const [gitUserEmail, setGitUserEmail] = useState('');
@@ -42,7 +41,6 @@ export function SetupForm() {
     savePrefs({ repoUrl, gitUserName, gitUserEmail });
     createSession({
       apiKey: apiKey || undefined,
-      githubToken: githubToken || undefined,
       repoUrl: repoUrl || undefined,
       gitUserName: gitUserName || undefined,
       gitUserEmail: gitUserEmail || undefined,
@@ -73,15 +71,6 @@ export function SetupForm() {
         <div className="form-section">
           <h3>GitHub (optional)</h3>
           <div className="form-group">
-            <label>Personal Access Token</label>
-            <input
-              type="password"
-              value={githubToken}
-              onChange={(e) => setGithubToken(e.target.value)}
-              placeholder="ghp_..."
-            />
-          </div>
-          <div className="form-group">
             <label>Repository URL</label>
             <input
               type="text"
@@ -89,6 +78,9 @@ export function SetupForm() {
               onChange={(e) => setRepoUrl(e.target.value)}
               placeholder="https://github.com/user/repo"
             />
+            <span className="form-hint">
+              Run <code>gh auth login</code> in the terminal to authenticate with GitHub for private repos.
+            </span>
           </div>
         </div>
 

@@ -10,6 +10,8 @@ const URL_REGEX = /https?:\/\/[^\s\x1b\x00-\x1f]{20,}/g;
 
 export function useTerminal(wsUrl: string | null) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const [authUrl, setAuthUrl] = useState<string | null>(null);
 
   // Buffer for detecting URLs that arrive across multiple WS frames
@@ -84,6 +86,8 @@ export function useTerminal(wsUrl: string | null) {
     term.loadAddon(webLinks);
     term.open(containerRef.current);
     fit.fit();
+    term.focus();
+    termRef.current = term;
 
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
@@ -95,6 +99,7 @@ export function useTerminal(wsUrl: string | null) {
     function connect() {
       ws = new WebSocket(url);
       ws.binaryType = 'arraybuffer';
+      wsRef.current = ws;
 
       ws.onopen = () => {
         attempts = 0;
@@ -138,6 +143,11 @@ export function useTerminal(wsUrl: string | null) {
       }
     });
 
+    // Click anywhere on the terminal container to focus (helps with padding areas)
+    const el = containerRef.current;
+    const handleClick = () => term.focus();
+    el.addEventListener('click', handleClick);
+
     const ro = new ResizeObserver(() => {
       fit.fit();
       const dims = fit.proposeDimensions();
@@ -145,17 +155,32 @@ export function useTerminal(wsUrl: string | null) {
         ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
       }
     });
-    ro.observe(containerRef.current);
+    ro.observe(el);
 
     return () => {
       intentionalClose = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+      el.removeEventListener('click', handleClick);
       ro.disconnect();
       if (ws) ws.close();
+      wsRef.current = null;
+      termRef.current = null;
       term.dispose();
     };
   }, [wsUrl, checkForUrls]);
 
-  return { containerRef, authUrl, dismissAuth };
+  const pasteClipboard = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(new TextEncoder().encode(text));
+      }
+      termRef.current?.focus();
+    } catch {
+      // clipboard permission denied or empty
+    }
+  }, []);
+
+  return { containerRef, authUrl, dismissAuth, pasteClipboard };
 }

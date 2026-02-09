@@ -15,7 +15,7 @@ import logging
 import os
 import sys
 import time
-import uuid
+import secrets
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -81,9 +81,9 @@ def save_sessions() -> None:
             {
                 "session_id": s.session_id,
                 "container_id": s.container_id,
+                "network_id": s.network_id,
                 "created_at": s.created_at,
                 "last_activity": s.last_activity,
-                "has_github": s.has_github,
                 "has_repo": s.has_repo,
             }
             for s in sessions.values()
@@ -124,8 +124,8 @@ class Session:
     created_at: float = field(default_factory=time.time)
     last_activity: float = field(default_factory=time.time)
     status: Status = Status.CREATING
-    has_github: bool = False
     has_repo: bool = False
+    network_id: str | None = None
 
 
 sessions: dict[str, Session] = {}
@@ -139,9 +139,19 @@ docker: aiodocker.Docker | None = None
 async def create_container(
     session_id: str,
     env: dict[str, str],
-) -> str:
-    """Create and start a sandbox container. Returns container_id."""
+) -> tuple[str, str]:
+    """Create and start a sandbox container with an isolated network.
+
+    Returns (container_id, network_id).
+    """
     assert docker is not None
+
+    # Create a dedicated bridge network for this session
+    net_name = f"remolt-net-{session_id}"
+    network = await docker.networks.create({"Name": net_name, "Driver": "bridge"})
+    network_id = network.id
+    logger.info(f"Created network {net_name}")
+
     config = {
         "Image": SANDBOX_IMAGE,
         "Tty": True,
@@ -152,18 +162,18 @@ async def create_container(
             "remolt.managed": "true",
             "remolt.session-id": session_id,
         },
-        "HostConfig": {"NetworkMode": "bridge"},
+        "HostConfig": {"NetworkMode": net_name},
     }
     container = await docker.containers.create_or_replace(
         name=f"remolt-{session_id}", config=config
     )
     await container.start()
     logger.info(f"Started container remolt-{session_id}")
-    return container.id
+    return container.id, network_id
 
 
-async def destroy_container(container_id: str) -> None:
-    """Stop and remove a container."""
+async def destroy_container(container_id: str, network_id: str | None = None) -> None:
+    """Stop and remove a container, then delete its network."""
     assert docker is not None
     try:
         c = docker.containers.container(container_id)
@@ -175,6 +185,12 @@ async def destroy_container(container_id: str) -> None:
         await c.delete(force=True)
     except Exception as e:
         logger.warning(f"Failed to remove container {container_id[:12]}: {e}")
+    if network_id:
+        try:
+            await docker.networks.delete(network_id)
+            logger.info(f"Deleted network {network_id[:12]}")
+        except Exception as e:
+            logger.warning(f"Failed to remove network {network_id[:12]}: {e}")
 
 
 async def cleanup_loop() -> None:
@@ -194,7 +210,7 @@ async def cleanup_loop() -> None:
             s = sessions.pop(sid, None)
             if s:
                 duration = time.time() - s.created_at
-                await destroy_container(s.container_id)
+                await destroy_container(s.container_id, s.network_id)
                 emit("session.ended", session_id=sid, reason="idle", duration_s=round(duration))
         if to_remove:
             save_sessions()
@@ -231,19 +247,44 @@ async def recover_sessions() -> None:
                 created_at=meta.get("created_at", time.time()),
                 last_activity=time.time(),  # reset idle clock on recovery
                 status=Status.RUNNING,
-                has_github=meta.get("has_github", False),
                 has_repo=meta.get("has_repo", False),
+                network_id=meta.get("network_id"),
             )
             live_sids.add(sid)
             logger.info(f"Recovered session {sid}")
             emit("session.recovered", session_id=sid)
         else:
             # Dead container — clean up
+            meta = saved.get(sid, {})
             try:
                 await docker.containers.container(c.id).delete(force=True)
                 logger.info(f"Cleaned up dead container {c.id[:12]}")
             except Exception:
                 pass
+            # Remove the dead container's network
+            net_id = meta.get("network_id")
+            if net_id:
+                try:
+                    await docker.networks.delete(net_id)
+                    logger.info(f"Cleaned up orphaned network {net_id[:12]}")
+                except Exception:
+                    pass
+
+    # Clean up any orphaned remolt-net-* networks not tied to a live session
+    try:
+        all_networks = await docker.networks.list()
+        for net in all_networks:
+            name = net.get("Name", "")
+            if name.startswith("remolt-net-"):
+                net_sid = name.removeprefix("remolt-net-")
+                if net_sid not in live_sids:
+                    try:
+                        await docker.networks.delete(net["Id"])
+                        logger.info(f"Cleaned up orphaned network {name}")
+                    except Exception:
+                        pass
+    except Exception:
+        pass
 
     if live_sids:
         save_sessions()
@@ -265,7 +306,7 @@ async def lifespan(app: FastAPI):
         s = sessions.pop(sid, None)
         if s:
             duration = time.time() - s.created_at
-            await destroy_container(s.container_id)
+            await destroy_container(s.container_id, s.network_id)
             emit("session.ended", session_id=sid, reason="shutdown", duration_s=round(duration))
     await docker.close()
     emit("server.stopped")
@@ -288,7 +329,6 @@ app.add_middleware(
 
 class CreateSessionReq(BaseModel):
     api_key: str | None = None
-    github_token: str | None = None
     repo_url: str | None = None
     git_user_name: str | None = None
     git_user_email: str | None = None
@@ -310,14 +350,12 @@ async def api_create_session(body: CreateSessionReq):
     if len(sessions) >= MAX_SESSIONS:
         raise HTTPException(429, "Max sessions reached")
 
-    sid = uuid.uuid4().hex[:12]
+    sid = secrets.token_urlsafe(32)
     env: dict[str, str] = {
         "TERM": "xterm-256color",
     }
     if body.api_key:
         env["ANTHROPIC_API_KEY"] = body.api_key
-    if body.github_token:
-        env["GITHUB_TOKEN"] = body.github_token
     if body.repo_url:
         env["REPO_URL"] = body.repo_url
     if body.git_user_name:
@@ -326,7 +364,7 @@ async def api_create_session(body: CreateSessionReq):
         env["GIT_USER_EMAIL"] = body.git_user_email
 
     try:
-        cid = await create_container(sid, env)
+        cid, nid = await create_container(sid, env)
     except Exception as e:
         raise HTTPException(500, f"Failed to create container: {e}")
 
@@ -334,10 +372,10 @@ async def api_create_session(body: CreateSessionReq):
         session_id=sid,
         container_id=cid,
         status=Status.RUNNING,
-        has_github=bool(body.github_token),
         has_repo=bool(body.repo_url),
+        network_id=nid,
     )
-    emit("session.created", session_id=sid, has_github=bool(body.github_token), has_repo=bool(body.repo_url))
+    emit("session.created", session_id=sid, has_repo=bool(body.repo_url))
     save_sessions()
     return SessionResp(session_id=sid, status="running", ws_url=f"/ws/terminal/{sid}")
 
@@ -358,7 +396,7 @@ async def api_delete_session(session_id: str):
     if not s:
         raise HTTPException(404, "Session not found")
     duration = time.time() - s.created_at
-    await destroy_container(s.container_id)
+    await destroy_container(s.container_id, s.network_id)
     emit("session.ended", session_id=session_id, reason="user", duration_s=round(duration))
     save_sessions()
     return {"status": "terminated", "session_id": session_id}

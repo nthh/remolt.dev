@@ -3,7 +3,7 @@ import { useTerminal } from '../hooks/useTerminal';
 
 export function TerminalView() {
   const { session, wsUrl, destroySession } = useSession();
-  const { containerRef, authUrl, dismissAuth } = useTerminal(wsUrl);
+  const { containerRef, authUrl, dismissAuth, pasteClipboard } = useTerminal(wsUrl);
 
   return (
     <div className="terminal-container">
@@ -23,6 +23,9 @@ export function TerminalView() {
           <a className="auth-link" href={authUrl} target="_blank" rel="noopener noreferrer">
             Open login &rarr;
           </a>
+          <button className="auth-paste" onClick={pasteClipboard}>
+            Paste code
+          </button>
           <button className="auth-dismiss" onClick={dismissAuth}>&times;</button>
         </div>
       )}

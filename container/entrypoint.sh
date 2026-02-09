@@ -1,12 +1,6 @@
 #!/bin/bash
 set -e
 
-# GitHub auth
-if [ -n "$GITHUB_TOKEN" ]; then
-    echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null || true
-    echo "GitHub CLI authenticated"
-fi
-
 # Git config
 git config --global user.name "${GIT_USER_NAME:-Claude Dev}"
 git config --global user.email "${GIT_USER_EMAIL:-claude@folia.sh}"

@@ -1,36 +1,9 @@
 # Remolt
 
-Sandboxed AI coding sessions in your browser. Connect your API key and a GitHub repo, get a full Linux terminal with Claude Code, Aider, or any AI coding CLI — push commits directly from the session.
+Sandboxed AI coding sessions in your browser. Launch a full Linux terminal with Claude Code, Aider, or any AI coding CLI — authenticate interactively, push commits directly from the session.
 
 **Live:** [remolt.dev](https://remolt.dev)
 **License:** Apache 2.0
-
----
-
-## Quick Start
-
-```bash
-# 1. Build the sandbox image
-#    This is the Linux environment users get when they launch a session.
-#    The server creates containers from this image at runtime via Docker API.
-docker build -t remolt-sandbox container/
-
-# 2. Build the Remolt server (includes the frontend)
-docker build -t remolt .
-
-# 3. Run
-docker run -p 3000:8080 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v remolt-data:/data \
-  -e REMOLT_EVENTS_LOG=/data/events.jsonl \
-  -e REMOLT_SESSIONS_FILE=/data/sessions.json \
-  remolt
-
-# 4. Open http://localhost:3000
-#    Click "Launch Session" → type `claude` → log in via browser when prompted
-```
-
-Two images because they serve different purposes: `remolt` is the server (runs once), `remolt-sandbox` is the template for user sessions (spawned on demand by the server via Docker API). The sandbox image must exist in the Docker image cache before the server can create session containers from it.
 
 ---
 
@@ -44,11 +17,11 @@ Server (FastAPI, single file, serves SPA + API)
 Sandbox Container (Ubuntu 24.04 + tmux + Claude Code + git + gh)
 ```
 
-1. User clicks "Launch Session" (optionally enters API key, GitHub PAT, repo URL)
+1. User clicks "Launch Session" (optionally enters API key, repo URL)
 2. Server creates a Docker container from the sandbox image
 3. Browser connects via WebSocket to a tmux session inside the container
 4. User runs `claude` — authenticates via browser OAuth (or uses a pre-set API key)
-5. Claude can push commits via `gh` / `git push` using the provided PAT
+5. User runs `gh auth login` — authenticates via browser device flow, then `git push` works
 6. Session auto-destroyed after 1 hour idle (configurable)
 
 **No API key required.** Claude Code supports interactive login — run `claude` in the terminal and it shows a URL to visit in your browser. Alternatively, provide an `ANTHROPIC_API_KEY` in the form for headless use.
@@ -62,7 +35,7 @@ Sandbox Container (Ubuntu 24.04 + tmux + Claude Code + git + gh)
 ```
 Launch Session
   → Container created with user's env vars
-  → Entrypoint: GitHub auth → git clone → bash
+  → Entrypoint: git config → repo clone → bash
   → Server execs: tmux new-session -As main
   → WebSocket bridges browser ↔ tmux TTY
 
@@ -121,9 +94,9 @@ Three mechanisms make sessions durable:
 |------|-------|----------|
 | Session ID | `localStorage` (`remolt:session`) | Until session ends |
 | Preferences | `localStorage` (`remolt:prefs`) | Indefinite |
-| API keys / tokens | Not stored | Entered each browser session |
+| API key | Not stored | Entered each browser session |
 
-Preferences include repo URL, git name, and git email — convenience fields so you don't re-type them. API keys and tokens are never written to storage.
+Preferences include repo URL, git name, and git email — convenience fields so you don't re-type them. API keys are never written to storage.
 
 ### Analytics Events
 
@@ -131,7 +104,7 @@ Structured JSON lines written to stdout (captured by Docker logs) and optionally
 
 ```jsonl
 {"ts": 1739120400.0, "event": "server.started", "max_sessions": 10, "max_idle_s": 3600}
-{"ts": 1739120410.5, "event": "session.created", "session_id": "a1b2c3", "has_github": true, "has_repo": true}
+{"ts": 1739120410.5, "event": "session.created", "session_id": "a1b2c3", "has_repo": true}
 {"ts": 1739120411.2, "event": "terminal.connected", "session_id": "a1b2c3"}
 {"ts": 1739120890.1, "event": "terminal.disconnected", "session_id": "a1b2c3"}
 {"ts": 1739120890.3, "event": "session.ended", "session_id": "a1b2c3", "reason": "user", "duration_s": 480}
@@ -177,14 +150,11 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ### GitHub Integration
 
-Provide a GitHub PAT and the sandbox gets:
+Run `gh auth login` in the terminal to authenticate via browser device flow. Once authenticated:
 
-- `gh` CLI authenticated — create PRs, browse issues, manage releases
-- `git push` to any repo the token has access to
-- Automatic repo clone into `/home/dev/workspace` if you provide a repo URL
-
-**Required PAT scopes:** `repo` (for private repos) or none (for public repos).
-[Create a PAT →](https://github.com/settings/tokens/new?scopes=repo&description=Remolt)
+- `gh` CLI works — create PRs, browse issues, manage releases
+- `git push` to any repo your account has access to
+- Provide a repo URL in the launch form to auto-clone into `/home/dev/workspace`
 
 ---
 
@@ -277,14 +247,17 @@ Put a reverse proxy (Caddy, nginx) in front for HTTPS.
 ### Isolation
 
 - Each session is an isolated container with no shared filesystem
+- Each container gets its own Docker bridge network (`remolt-net-{id}`), preventing container-to-container traffic while preserving internet access via NAT
 - Containers run as non-root user `dev` (with sudo for convenience)
 - No access to host network, other containers, or server filesystem
 - Server communicates with containers only via Docker exec API
+- In K8s, a NetworkPolicy denies pod-to-pod traffic between sandbox pods
 
 ### Credentials
 
-- API keys and tokens are container env vars — never written to server disk
-- Destroyed when the container is removed
+- API keys are container env vars — never written to server disk
+- GitHub auth state lives inside the container (via `gh auth login`)
+- All credentials destroyed when the container is removed
 - Browser stores only session ID and non-secret preferences
 
 ### Threat Model
@@ -305,7 +278,7 @@ experiments/remote-dev/
 ├── Dockerfile              # Multi-stage: build frontend + server image
 ├── container/
 │   ├── Dockerfile          # Sandbox: Ubuntu 24.04 + Node 22 + Claude Code + git + gh + tmux
-│   └── entrypoint.sh       # GitHub auth, repo clone, exec bash
+│   └── entrypoint.sh       # Git config, repo clone, exec bash
 ├── server/
 │   └── server.py           # Everything: sessions, WebSocket bridge, cleanup, static serving
 ├── app/
@@ -321,6 +294,7 @@ experiments/remote-dev/
 │           └── TerminalView.tsx        # Full-screen terminal
 └── k8s/
     ├── namespace.yaml
+    ├── network-policy.yaml # Deny sandbox-to-sandbox traffic
     ├── rbac.yaml
     └── server.yaml         # Deployment + Service + PVC
 ```
