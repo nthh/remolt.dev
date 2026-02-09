@@ -51,7 +51,7 @@ export function SetupForm() {
     <div className="setup-container">
       <form className="setup-card" onSubmit={handleSubmit}>
         <h1>Remolt</h1>
-        <p className="subtitle">Sandboxed AI coding sessions in your browser.</p>
+        <p className="subtitle">Sandboxed AI coding sessions in your browser. Claude Code, git, and GitHub CLI pre-installed. Log in interactively &mdash; no API key needed.</p>
 
         <div className="form-section">
           <h3>Repository (optional)</h3>

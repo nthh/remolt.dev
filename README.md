@@ -264,11 +264,12 @@ Put a reverse proxy (Caddy, nginx) in front for HTTPS.
 
 ### Threat Model
 
-Remolt is for **trusted users**. It is not a multi-tenant platform. If deploying publicly:
+Users can run arbitrary code — that's the point. Abuse is mitigated by:
 
-- Users can run arbitrary code (by design — it's a dev environment)
-- Mitigate resource abuse with `REMOLT_MAX_SESSIONS` and K8s resource limits
-- Docker socket mount gives the server Docker access — mitigate with gVisor or Pod Security Standards in K8s
+- **Session limits** — `REMOLT_MAX_SESSIONS` caps concurrent sandboxes
+- **Resource limits** — K8s CPU/memory limits per pod (2 CPU, 2Gi default)
+- **Idle timeout** — sandboxes auto-destroyed after inactivity
+- **Isolation** — each sandbox is a separate container/pod with no shared state
 
 ---
 
