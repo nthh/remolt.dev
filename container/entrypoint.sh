@@ -3,7 +3,7 @@ set -e
 
 # Git config
 git config --global user.name "${GIT_USER_NAME:-Claude Dev}"
-git config --global user.email "${GIT_USER_EMAIL:-claude@folia.sh}"
+git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"
 
 # Clone repo if specified
 if [ -n "$REPO_URL" ]; then

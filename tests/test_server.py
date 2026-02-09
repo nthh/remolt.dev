@@ -77,6 +77,12 @@ class FakeBackend:
         self.streams[sandbox_id] = stream
         return stream
 
+    async def inject_env(self, sandbox_id: str, env: dict[str, str]) -> None:
+        sb = self.sandboxes.get(sandbox_id)
+        if sb:
+            sb["env"].update(env)
+            sb["env_injected"] = True
+
     async def close(self) -> None:
         self._closed = True
 
@@ -354,3 +360,84 @@ def test_emit(capsys):
     assert record["event"] == "test.event"
     assert record["foo"] == "bar"
     assert "ts" in record
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: Warm pool
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_claim_warm_sandbox(fake_backend):
+    import server.server as srv
+    srv.backend = fake_backend
+
+    # Pre-populate warm pool
+    sandbox_id = await fake_backend.create("warm-test", {"TERM": "xterm-256color"})
+    srv.warm_pool.put_nowait(sandbox_id)
+    assert srv.warm_pool.qsize() == 1
+
+    # Claim it
+    claimed = await srv.claim_warm_sandbox({"ANTHROPIC_API_KEY": "sk-test"})
+    assert claimed == sandbox_id
+    assert srv.warm_pool.qsize() == 0
+    # Env should have been injected
+    sb = fake_backend.sandboxes[sandbox_id]
+    assert sb["env"]["ANTHROPIC_API_KEY"] == "sk-test"
+    assert sb["env_injected"] is True
+
+
+@pytest.mark.asyncio
+async def test_claim_warm_sandbox_empty(fake_backend):
+    import server.server as srv
+    srv.backend = fake_backend
+
+    # Empty pool
+    while not srv.warm_pool.empty():
+        srv.warm_pool.get_nowait()
+
+    result = await srv.claim_warm_sandbox({"TERM": "xterm-256color"})
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_create_session_uses_warm_pool(fake_backend):
+    """When warm pool has a sandbox, session creation claims it instead of creating new."""
+    import server.server as srv
+    srv.backend = fake_backend
+    srv.sessions.clear()
+
+    # Pre-populate warm pool
+    sandbox_id = await fake_backend.create("warm-pool-1", {"TERM": "xterm-256color"})
+    srv.warm_pool.put_nowait(sandbox_id)
+
+    initial_count = len(fake_backend.sandboxes)
+
+    # Create session via API
+    from fastapi.testclient import TestClient
+    client = TestClient(srv.app, raise_server_exceptions=False)
+    resp = client.post("/api/sessions", json={"api_key": "sk-warm"})
+    assert resp.status_code == 200
+
+    # Should have claimed from pool, not created a new one
+    assert len(fake_backend.sandboxes) == initial_count
+    assert srv.warm_pool.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_create_session_falls_back_to_cold_start(fake_backend):
+    """When warm pool is empty, session creation falls back to backend.create."""
+    import server.server as srv
+    srv.backend = fake_backend
+    srv.sessions.clear()
+
+    # Ensure pool is empty
+    while not srv.warm_pool.empty():
+        srv.warm_pool.get_nowait()
+
+    from fastapi.testclient import TestClient
+    client = TestClient(srv.app, raise_server_exceptions=False)
+    resp = client.post("/api/sessions", json={})
+    assert resp.status_code == 200
+    # Backend should have created a new sandbox
+    assert len(fake_backend.sandboxes) == 1
