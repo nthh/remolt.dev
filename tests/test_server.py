@@ -239,7 +239,7 @@ def test_create_session_backend_failure(client, fake_backend):
     fake_backend.create = fail
     resp = client.post("/api/sessions", json={})
     assert resp.status_code == 500
-    assert "boom" in resp.json()["detail"]
+    assert "try again" in resp.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------

@@ -388,7 +388,9 @@ class K8sBackend(SandboxBackend):
         )
 
     async def create(self, session_id: str, env: dict[str, str]) -> str:
-        pod_name = f"remolt-{session_id[:16]}"
+        # K8s names must be lowercase alphanumeric + hyphens, start/end with alphanumeric
+        slug = session_id[:16].lower().replace("_", "-").strip("-")
+        pod_name = f"remolt-{slug}"
         pod_manifest = {
             "apiVersion": "v1",
             "kind": "Pod",
@@ -607,7 +609,7 @@ async def warm_pool_loop() -> None:
         deficit = WARM_POOL_SIZE - warm_pool.qsize()
         for _ in range(deficit):
             try:
-                pool_id = secrets.token_urlsafe(8)
+                pool_id = secrets.token_hex(4)
                 sandbox_id = await backend.create(f"warm-{pool_id}", {"TERM": "xterm-256color"})
                 warm_pool.put_nowait(sandbox_id)
                 logger.info(f"Warm pool: created {sandbox_id} (pool size: {warm_pool.qsize()})")
@@ -726,7 +728,8 @@ async def api_create_session(body: CreateSessionReq):
         if not sandbox_id:
             sandbox_id = await backend.create(sid, env)
     except Exception as e:
-        raise HTTPException(500, f"Failed to create sandbox: {e}")
+        logger.error(f"Failed to create sandbox: {e}")
+        raise HTTPException(500, "Failed to create session. Please try again.")
 
     sessions[sid] = Session(
         session_id=sid,
