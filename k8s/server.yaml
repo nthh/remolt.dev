@@ -42,6 +42,8 @@ spec:
               value: "20"
             - name: REMOLT_MAX_IDLE_SECONDS
               value: "3600"
+            - name: REMOLT_WARM_POOL
+              value: "2"
             - name: REMOLT_EVENTS_LOG
               value: /data/events.jsonl
           volumeMounts:

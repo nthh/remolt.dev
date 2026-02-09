@@ -104,12 +104,9 @@ export function useTerminal(wsUrl: string | null) {
       wsRef.current = ws;
 
       ws.onopen = () => {
-        const wasReconnect = everConnected;
-        everConnected = true;
         attempts = 0;
-        term.writeln(wasReconnect
-          ? '\x1b[32m● Reconnected\x1b[0m\r'
-          : '\x1b[32m● Connected\x1b[0m\r');
+        // Don't print "Connected" yet — wait for first data from sandbox
+        // to confirm exec_attach actually succeeded
         const dims = fit.proposeDimensions();
         if (dims) {
           ws!.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
@@ -119,7 +116,13 @@ export function useTerminal(wsUrl: string | null) {
       ws.onmessage = (ev) => {
         if (ev.data instanceof ArrayBuffer) {
           const bytes = new Uint8Array(ev.data);
+          // Show connected message on first data received
+          if (!everConnected) {
+            everConnected = true;
+            term.writeln('\x1b[32m● Connected\x1b[0m\r');
+          }
           term.write(bytes);
+          term.focus();
           checkForUrls(decoder.decode(bytes, { stream: true }));
         }
       };
