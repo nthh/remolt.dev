@@ -27,12 +27,13 @@ spec:
       serviceAccountName: remolt-server
       containers:
         - name: server
-          image: remolt-server:latest
+          image: ghcr.io/nthh/remolt-server:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
           env:
             - name: REMOLT_SANDBOX_IMAGE
-              value: remolt-sandbox:latest
+              value: ghcr.io/nthh/remolt-sandbox:latest
             - name: REMOLT_MAX_SESSIONS
               value: "20"
             - name: REMOLT_MAX_IDLE_SECONDS
