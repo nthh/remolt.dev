@@ -182,17 +182,12 @@ export function useTerminal(wsUrl: string | null) {
     };
   }, [wsUrl, checkForUrls]);
 
-  const pasteClipboard = useCallback(async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(new TextEncoder().encode(text.trim() + '\n'));
-      }
-      termRef.current?.focus();
-    } catch {
-      // clipboard permission denied or empty
+  const sendText = useCallback((text: string) => {
+    if (text && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(new TextEncoder().encode(text));
     }
+    termRef.current?.focus();
   }, []);
 
-  return { containerRef, authUrl, dismissAuth, pasteClipboard };
+  return { containerRef, authUrl, dismissAuth, sendText };
 }
