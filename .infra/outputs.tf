@@ -20,3 +20,9 @@ resource "local_file" "kubeconfig" {
   filename        = "${path.module}/kubeconfig-${var.environment}.yaml"
   file_permission = "0600"
 }
+
+output "tunnel_token" {
+  description = "Cloudflare tunnel token for cloudflared"
+  value       = cloudflare_zero_trust_tunnel_cloudflared.remolt.tunnel_token
+  sensitive   = true
+}

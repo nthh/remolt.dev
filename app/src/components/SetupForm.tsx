@@ -111,6 +111,10 @@ export function SetupForm() {
         <button type="submit" className="btn btn-primary" disabled={isLoading}>
           {isLoading ? 'Launching...' : 'Launch Session'}
         </button>
+
+        <a className="source-link" href="https://github.com/nthh/remolt.dev" target="_blank" rel="noopener noreferrer">
+          Source on GitHub
+        </a>
       </form>
     </div>
   );

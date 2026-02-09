@@ -200,9 +200,9 @@ The Vite dev server proxies `/api/*` and `/ws/*` to the server at `localhost:808
 
 | Component | Where |
 |-----------|-------|
-| Frontend SPA | Cloudflare Pages at `remolt.dev` |
-| Server | Vultr K8s, `remolt` namespace |
+| Server + SPA | Vultr K8s, `remolt` namespace |
 | Sandbox containers | Vultr K8s Pods |
+| Ingress | Cloudflare Tunnel (cloudflared) |
 | Analytics + sessions | 1Gi PVC |
 
 ### Deploy to K8s

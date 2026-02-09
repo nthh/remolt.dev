@@ -1,0 +1,105 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - 'container/**'
+      - 'app/**'
+      - 'Dockerfile'
+      - 'k8s/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  NAMESPACE: nthh
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      sandbox: ${{ steps.filter.outputs.sandbox }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            server:
+              - 'server/**'
+              - 'app/**'
+              - 'Dockerfile'
+            sandbox:
+              - 'container/**'
+
+  build:
+    needs: changes
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - service: server
+            dockerfile: Dockerfile
+            context: .
+            changed: ${{ needs.changes.outputs.server }}
+          - service: sandbox
+            dockerfile: container/Dockerfile
+            context: container
+            changed: ${{ needs.changes.outputs.sandbox }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.server == 'true' ||
+      needs.changes.outputs.sandbox == 'true'
+
+    steps:
+      - if: matrix.changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
+
+      - if: matrix.changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: docker/setup-buildx-action@v3
+
+      - if: matrix.changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - if: matrix.changed == 'true' || github.event_name == 'workflow_dispatch'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-${{ matrix.service }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-${{ matrix.service }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy:
+    needs: [changes, build]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - uses: azure/setup-kubectl@v4
+
+      - run: |
+          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > /tmp/kubeconfig
+          echo "KUBECONFIG=/tmp/kubeconfig" >> "$GITHUB_ENV"
+
+      - run: |
+          if [[ "${{ needs.changes.outputs.server }}" == "true" ]] || [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            kubectl -n remolt set image deployment/remolt-server \
+              server=${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-server:${{ github.sha }}
+            kubectl -n remolt rollout status deployment/remolt-server --timeout=300s
+          fi

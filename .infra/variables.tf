@@ -39,3 +39,27 @@ variable "node_max" {
   type        = number
   default     = 5
 }
+
+# --- Cloudflare ---
+
+variable "cloudflare_api_token" {
+  description = "Cloudflare API token"
+  type        = string
+  sensitive   = true
+}
+
+variable "cloudflare_account_id" {
+  description = "Cloudflare account ID"
+  type        = string
+}
+
+variable "cloudflare_zone_id" {
+  description = "Cloudflare zone ID for the domain"
+  type        = string
+}
+
+variable "domain" {
+  description = "Domain for the tunnel (e.g. remolt.dev)"
+  type        = string
+  default     = "remolt.dev"
+}

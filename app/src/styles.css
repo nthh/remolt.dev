@@ -148,6 +148,19 @@ html, body, #root {
   cursor: not-allowed;
 }
 
+.source-link {
+  display: block;
+  text-align: center;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.source-link:hover {
+  color: var(--fg);
+}
+
 .btn-danger {
   background: transparent;
   color: var(--red);

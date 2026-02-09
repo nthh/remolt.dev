@@ -16,6 +16,8 @@ __pycache__/
 .infra/*.tfstate.backup
 .infra/terraform.tfvars
 .infra/*.auto.tfvars
+.infra/*.tfstate.lock.info
+.infra/kubeconfig-*.yaml
 
 # IDE
 .idea/
