@@ -9,6 +9,7 @@ git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"
 cat > /home/dev/.tmux.conf << 'TMUX'
 set -g mouse on
 set -g history-limit 10000
+set -g status off
 TMUX
 
 # Pre-configure Claude Code (theme only — don't set hasCompletedOnboarding, it skips auth)
@@ -43,14 +44,14 @@ This is a cloud sandbox running Ubuntu 24.04 with tmux, git, gh, and Claude Code
 - **Remolt source** is at `~/remolt-dev/` — you can fix bugs and submit PRs
 - **User's repo** (if any) is at `~/workspace/`
 
-## Fixing remolt bugs
+## Fixing bugs & requesting features
 
-If you encounter a bug in the sandbox itself (terminal, auth, UI, server):
+If you encounter a bug or have a feature request for remolt:
 
 1. The source is at `~/remolt-dev/`
-2. Fix the issue there
-3. Fork first if you don't have push access: `cd ~/remolt-dev && gh repo fork --remote`
-4. Submit a PR: `gh pr create`
+2. For bugs: fix the issue and submit a PR: `cd ~/remolt-dev && gh pr create`
+3. For feature requests: file an issue: `cd ~/remolt-dev && gh issue create`
+4. Fork first if you don't have push access: `cd ~/remolt-dev && gh repo fork --remote`
 
 See `~/remolt-dev/CLAUDE.md` for full architecture details and conventions.
 CLAUDEMD
@@ -67,9 +68,10 @@ if [ ! -f /tmp/.remolt-welcomed ]; then
     echo -e "  Run \033[1mclaude\033[0m to start an AI coding session."
     echo -e "  Run \033[1mgh pr create\033[0m to push your work."
     echo ""
-    echo -e "  \033[2mHit a bug?"
+    echo -e "  \033[2mHit a bug or have a feature request?"
     echo -e "  The remolt source is at ~/remolt-dev/"
-    echo -e "  Ask Claude to fix it and make a PR.\033[0m"
+    echo -e "  Ask Claude to fix it and make a PR,"
+    echo -e "  or file an issue with gh issue create.\033[0m"
     echo ""
 fi
 BASHRC

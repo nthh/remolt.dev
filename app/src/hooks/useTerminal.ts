@@ -223,5 +223,9 @@ export function useTerminal(wsUrl: string | null) {
     termRef.current?.focus();
   }, []);
 
-  return { containerRef, authUrl, dismissAuth, sendText };
+  const getSelection = useCallback(() => {
+    return termRef.current?.getSelection() ?? '';
+  }, []);
+
+  return { containerRef, authUrl, dismissAuth, sendText, getSelection };
 }

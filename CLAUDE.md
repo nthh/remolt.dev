@@ -39,15 +39,15 @@ Sandbox Container/Pod (Ubuntu 24.04 + tmux + Claude Code + git + gh)
 5. User runs `claude` — authenticates via browser OAuth
 6. Sessions auto-destroyed after 1 hour idle
 
-## Fixing Bugs
+## Fixing Bugs & Requesting Features
 
-You're inside a remolt sandbox with the remolt source code at `~/remolt-dev/`. If you encounter a bug or want to improve something:
+You're inside a remolt sandbox with the remolt source code at `~/remolt-dev/`. If you encounter a bug, want to improve something, or have a feature request:
 
 1. The source is already cloned at `~/remolt-dev/`
-2. Fix the issue
-3. Create a PR: `cd ~/remolt-dev && gh pr create`
+2. **Bug fix:** Fix the issue and create a PR: `cd ~/remolt-dev && gh pr create`
+3. **Feature request:** File an issue: `cd ~/remolt-dev && gh issue create`
 
-The GitHub token is already configured, so `gh` and `git push` work immediately.
+The GitHub token is already configured, so `gh`, `git push`, and `gh issue create` work immediately.
 
 ### What You Can Fix
 

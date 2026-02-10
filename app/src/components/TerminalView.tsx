@@ -3,7 +3,27 @@ import { useTerminal } from '../hooks/useTerminal';
 
 export function TerminalView() {
   const { session, wsUrl, destroySession } = useSession();
-  const { containerRef, authUrl, dismissAuth, sendText } = useTerminal(wsUrl);
+  const { containerRef, authUrl, dismissAuth, sendText, getSelection } = useTerminal(wsUrl);
+
+  const handlePaste = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) sendText(text);
+    } catch {
+      // Clipboard API denied
+    }
+  };
+
+  const handleCopy = async () => {
+    const text = getSelection();
+    if (text) {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        // Clipboard API denied
+      }
+    }
+  };
 
   const handlePasteCode = async () => {
     try {
@@ -13,7 +33,7 @@ export function TerminalView() {
         dismissAuth();
       }
     } catch {
-      // Clipboard API denied — can't do much
+      // Clipboard API denied
     }
   };
 
@@ -23,30 +43,6 @@ export function TerminalView() {
         <div className="session-info">
           <span className="status-dot" />
           <span className="session-id">{session?.session_id}</span>
-        </div>
-        <div className="terminal-toolbar">
-          <button
-            className="toolbar-btn"
-            onClick={() => sendText('\x1b')}
-            title="Send Escape (stop current operation)"
-          >
-            Esc
-          </button>
-          <span className="toolbar-sep" />
-          <button
-            className="toolbar-btn"
-            onClick={() => sendText('\x02\x1b[5~')}
-            title="Scroll up (tmux scrollback)"
-          >
-            &#x25B2;
-          </button>
-          <button
-            className="toolbar-btn"
-            onClick={() => sendText('\x1b[6~')}
-            title="Scroll down"
-          >
-            &#x25BC;
-          </button>
         </div>
         <button className="btn btn-danger" onClick={destroySession}>
           End Session
@@ -65,6 +61,36 @@ export function TerminalView() {
         </div>
       )}
       <div className="terminal-body" ref={containerRef} />
+      <div className="terminal-bottombar">
+        <button className="toolbar-btn" onClick={handlePaste} title="Paste from clipboard">
+          Paste
+        </button>
+        <button className="toolbar-btn" onClick={handleCopy} title="Copy selection">
+          Copy
+        </button>
+        <span className="toolbar-sep" />
+        <button
+          className="toolbar-btn"
+          onClick={() => sendText('\x1b')}
+          title="Send Escape"
+        >
+          Esc
+        </button>
+        <button
+          className="toolbar-btn"
+          onClick={() => sendText('\x02\x1b[5~')}
+          title="Scroll up (tmux scrollback)"
+        >
+          &#x25B2;
+        </button>
+        <button
+          className="toolbar-btn"
+          onClick={() => sendText('\x1b[6~')}
+          title="Scroll down"
+        >
+          &#x25BC;
+        </button>
+      </div>
     </div>
   );
 }
