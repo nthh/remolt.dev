@@ -223,13 +223,5 @@ export function useTerminal(wsUrl: string | null) {
     termRef.current?.focus();
   }, []);
 
-  const scrollUp = useCallback(() => {
-    termRef.current?.scrollPages(-1);
-  }, []);
-
-  const scrollDown = useCallback(() => {
-    termRef.current?.scrollPages(1);
-  }, []);
-
-  return { containerRef, authUrl, dismissAuth, sendText, scrollUp, scrollDown };
+  return { containerRef, authUrl, dismissAuth, sendText };
 }

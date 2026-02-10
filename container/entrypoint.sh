@@ -31,6 +31,29 @@ fi
 # Clone remolt source so users can fix bugs and contribute
 git clone https://github.com/nthh/remolt.dev.git /home/dev/remolt-dev 2>/dev/null || true
 
+# Give Claude Code context about this sandbox
+cat > /home/dev/CLAUDE.md << 'CLAUDEMD'
+# You are inside a remolt.dev sandbox
+
+This is a cloud sandbox running Ubuntu 24.04 with tmux, git, gh, and Claude Code pre-installed.
+
+## Key facts
+
+- **GitHub token** is pre-configured — `gh` and `git push` work immediately
+- **Remolt source** is at `~/remolt-dev/` — you can fix bugs and submit PRs
+- **User's repo** (if any) is at `~/workspace/`
+
+## Fixing remolt bugs
+
+If you encounter a bug in the sandbox itself (terminal, auth, UI, server):
+
+1. The source is at `~/remolt-dev/`
+2. Fix the issue there
+3. Submit a PR: `cd ~/remolt-dev && gh pr create`
+
+See `~/remolt-dev/CLAUDE.md` for full architecture details and conventions.
+CLAUDEMD
+
 # Welcome message (shown once per session)
 cat >> /home/dev/.bashrc << 'BASHRC'
 

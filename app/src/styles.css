@@ -204,6 +204,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 8px 16px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);

@@ -3,7 +3,7 @@ import { useTerminal } from '../hooks/useTerminal';
 
 export function TerminalView() {
   const { session, wsUrl, destroySession } = useSession();
-  const { containerRef, authUrl, dismissAuth, sendText, scrollUp, scrollDown } = useTerminal(wsUrl);
+  const { containerRef, authUrl, dismissAuth, sendText } = useTerminal(wsUrl);
 
   const handlePasteCode = async () => {
     try {
@@ -22,7 +22,6 @@ export function TerminalView() {
       <div className="terminal-header">
         <div className="session-info">
           <span className="status-dot" />
-          <span>Session</span>
           <span className="session-id">{session?.session_id}</span>
         </div>
         <div className="terminal-toolbar">
@@ -36,14 +35,14 @@ export function TerminalView() {
           <span className="toolbar-sep" />
           <button
             className="toolbar-btn"
-            onClick={scrollUp}
+            onClick={() => sendText('\x1b[5~')}
             title="Scroll up (Page Up)"
           >
             &#x25B2;
           </button>
           <button
             className="toolbar-btn"
-            onClick={scrollDown}
+            onClick={() => sendText('\x1b[6~')}
             title="Scroll down (Page Down)"
           >
             &#x25BC;
