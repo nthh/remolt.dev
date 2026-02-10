@@ -84,6 +84,11 @@ class FakeBackend:
             sb["env"].update(env)
             sb["env_injected"] = True
 
+    async def relabel(self, sandbox_id: str, session_id: str) -> None:
+        sb = self.sandboxes.get(sandbox_id)
+        if sb:
+            sb["session_id"] = session_id
+
     async def close(self) -> None:
         self._closed = True
 
@@ -382,7 +387,7 @@ async def test_claim_warm_sandbox(fake_backend):
     assert srv.warm_pool.qsize() == 1
 
     # Claim it
-    claimed = await srv.claim_warm_sandbox({"REPO_URL": "https://github.com/test/repo"})
+    claimed = await srv.claim_warm_sandbox("test-session", {"REPO_URL": "https://github.com/test/repo"})
     assert claimed == sandbox_id
     assert srv.warm_pool.qsize() == 0
     # Env should have been injected
@@ -400,7 +405,7 @@ async def test_claim_warm_sandbox_empty(fake_backend):
     while not srv.warm_pool.empty():
         srv.warm_pool.get_nowait()
 
-    result = await srv.claim_warm_sandbox({"TERM": "xterm-256color"})
+    result = await srv.claim_warm_sandbox("test-session", {"TERM": "xterm-256color"})
     assert result is None
 
 
