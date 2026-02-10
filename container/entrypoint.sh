@@ -37,7 +37,8 @@ if [ ! -f /tmp/.remolt-welcomed ]; then
     echo -e "  Run \033[1mclaude\033[0m to start an AI coding session."
     echo -e "  Run \033[1mgh pr create\033[0m to push your work."
     echo ""
-    echo -e "  \033[2mHit a bug? The remolt source is at ~/remolt-dev/"
+    echo -e "  \033[2mHit a bug?"
+    echo -e "  The remolt source is at ~/remolt-dev/"
     echo -e "  Ask Claude to fix it and make a PR.\033[0m"
     echo ""
 fi
