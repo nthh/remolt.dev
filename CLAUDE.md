@@ -65,7 +65,7 @@ cd ~/remolt-dev
 cd app && npm install && npm run build
 
 # Server (read-only — can't run inside sandbox, but tests work)
-cd server && pip install fastapi uvicorn[standard] aiodocker httpx websockets
+cd server && pip install fastapi uvicorn[standard] aiodocker httpx websockets cryptography
 python -m pytest ../tests/
 ```
 

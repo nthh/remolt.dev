@@ -753,19 +753,21 @@ app.add_middleware(
 # Auth helpers
 # ---------------------------------------------------------------------------
 
-def _sign_cookie(value: str) -> str:
-    sig = hmac.new(COOKIE_SECRET.encode(), value.encode(), hashlib.sha256).hexdigest()[:16]
-    return f"{value}.{sig}"
+from cryptography.fernet import Fernet, InvalidToken
+
+_fernet_key = base64.urlsafe_b64encode(hashlib.sha256(COOKIE_SECRET.encode()).digest())
+_fernet = Fernet(_fernet_key)
 
 
-def _verify_cookie(cookie: str) -> str | None:
-    if "." not in cookie:
+def _encrypt_cookie(data: dict) -> str:
+    return _fernet.encrypt(_json.dumps(data).encode()).decode()
+
+
+def _decrypt_cookie(token: str) -> dict | None:
+    try:
+        return _json.loads(_fernet.decrypt(token.encode()))
+    except (InvalidToken, Exception):
         return None
-    value, sig = cookie.rsplit(".", 1)
-    expected = hmac.new(COOKIE_SECRET.encode(), value.encode(), hashlib.sha256).hexdigest()[:16]
-    if hmac.compare_digest(sig, expected):
-        return value
-    return None
 
 
 @dataclass
@@ -783,11 +785,10 @@ async def get_current_user(request) -> AuthUser | None:
     cookie = request.cookies.get("remolt_auth")
     if not cookie:
         return None
-    payload = _verify_cookie(cookie)
-    if not payload:
+    data = _decrypt_cookie(cookie)
+    if not data:
         return None
     try:
-        data = _json.loads(base64.b64decode(payload))
         return AuthUser(**data)
     except Exception:
         return None
@@ -795,16 +796,15 @@ async def get_current_user(request) -> AuthUser | None:
 
 def require_auth(request) -> AuthUser:
     """Raise 401 if not authenticated."""
-    cookie = request.cookies.get("remolt_auth")
     if not AUTH_REQUIRED:
         return AuthUser(login="anonymous", name="", email="", gh_token="")
+    cookie = request.cookies.get("remolt_auth")
     if not cookie:
         raise HTTPException(401, "Authentication required")
-    payload = _verify_cookie(cookie)
-    if not payload:
+    data = _decrypt_cookie(cookie)
+    if not data:
         raise HTTPException(401, "Invalid session")
     try:
-        data = _json.loads(base64.b64decode(payload))
         return AuthUser(**data)
     except Exception:
         raise HTTPException(401, "Invalid session")
@@ -882,16 +882,14 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
                         email = e.get("email", "")
                         break
 
-    payload = base64.b64encode(_json.dumps({
-        "login": user.get("login", ""),
-        "name": user.get("name", "") or "",
-        "email": email,
-        "gh_token": gh_token,
-    }).encode()).decode()
-
     resp = RedirectResponse("/?authed=1")
     resp.set_cookie(
-        "remolt_auth", _sign_cookie(payload),
+        "remolt_auth", _encrypt_cookie({
+            "login": user.get("login", ""),
+            "name": user.get("name", "") or "",
+            "email": email,
+            "gh_token": gh_token,
+        }),
         httponly=True, secure=True, samesite="lax", max_age=86400,
     )
     resp.delete_cookie("oauth_state")

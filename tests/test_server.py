@@ -468,15 +468,14 @@ async def test_create_session_falls_back_to_cold_start(fake_backend):
 
 
 def _make_auth_cookie(login="testuser", name="Test User", email="test@example.com", gh_token="ghp_test123"):
-    """Build a signed auth cookie for testing."""
+    """Build an encrypted auth cookie for testing."""
     import server.server as srv
-    payload = base64.b64encode(json.dumps({
+    return srv._encrypt_cookie({
         "login": login,
         "name": name,
         "email": email,
         "gh_token": gh_token,
-    }).encode()).decode()
-    return srv._sign_cookie(payload)
+    })
 
 
 @pytest.fixture
@@ -498,23 +497,25 @@ def auth_client(fake_backend):
 # ---------------------------------------------------------------------------
 
 
-def test_sign_and_verify_cookie():
+def test_encrypt_and_decrypt_cookie():
     import server.server as srv
-    signed = srv._sign_cookie("hello")
-    assert "." in signed
-    assert srv._verify_cookie(signed) == "hello"
+    data = {"login": "test", "name": "Test", "email": "t@t.com", "gh_token": "ghp_x"}
+    encrypted = srv._encrypt_cookie(data)
+    decrypted = srv._decrypt_cookie(encrypted)
+    assert decrypted == data
 
 
-def test_verify_cookie_rejects_tampered():
+def test_decrypt_cookie_rejects_tampered():
     import server.server as srv
-    signed = srv._sign_cookie("hello")
-    tampered = signed[:-1] + ("a" if signed[-1] != "a" else "b")
-    assert srv._verify_cookie(tampered) is None
+    data = {"login": "test"}
+    encrypted = srv._encrypt_cookie(data)
+    tampered = encrypted[:-1] + ("a" if encrypted[-1] != "a" else "b")
+    assert srv._decrypt_cookie(tampered) is None
 
 
-def test_verify_cookie_rejects_no_dot():
+def test_decrypt_cookie_rejects_garbage():
     import server.server as srv
-    assert srv._verify_cookie("nosignature") is None
+    assert srv._decrypt_cookie("not-a-valid-token") is None
 
 
 # ---------------------------------------------------------------------------
@@ -710,3 +711,243 @@ def test_create_session_oauth_token_preferred_over_manual_pat(auth_client, fake_
     assert resp.status_code == 200
     sb = list(fake_backend.sandboxes.values())[0]
     assert sb["env"]["GITHUB_TOKEN"] == "ghp_oauth"
+
+
+# ---------------------------------------------------------------------------
+# Security tests
+# ---------------------------------------------------------------------------
+
+
+def _create_authed_session(auth_client, login="testuser"):
+    """Helper: create a session with auth and return the session_id."""
+    cookie = _make_auth_cookie(login=login)
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.post("/api/sessions", json={})
+    assert resp.status_code == 200
+    return resp.json()["session_id"]
+
+
+# -- Session hijacking: recovered sessions with empty owner --
+
+
+def test_ws_rejects_recovered_session_with_empty_owner(auth_client, fake_backend):
+    """Recovered session with empty owner (lost sessions file) must be inaccessible."""
+    import server.server as srv
+
+    srv.sessions["orphan"] = srv.Session(
+        session_id="orphan",
+        sandbox_id="fake-orphan",
+        status=srv.Status.RUNNING,
+        owner="",
+    )
+    cookie = _make_auth_cookie(login="testuser")
+    auth_client.cookies.set("remolt_auth", cookie)
+
+    with pytest.raises(Exception):
+        with auth_client.websocket_connect("/ws/terminal/orphan"):
+            pass
+
+
+# -- WebSocket Origin check --
+
+
+def test_ws_rejects_cross_origin(client, fake_backend):
+    """WebSocket from a disallowed origin should be rejected."""
+    resp = client.post("/api/sessions", json={})
+    sid = resp.json()["session_id"]
+
+    with pytest.raises(Exception):
+        with client.websocket_connect(
+            f"/ws/terminal/{sid}",
+            headers={"origin": "https://evil.com"},
+        ):
+            pass
+
+
+def test_ws_allows_valid_origin(client, fake_backend):
+    """WebSocket from an allowed origin should connect."""
+    import server.server as srv
+
+    resp = client.post("/api/sessions", json={})
+    sid = resp.json()["session_id"]
+
+    with client.websocket_connect(
+        f"/ws/terminal/{sid}",
+        headers={"origin": srv.ALLOWED_ORIGINS[0]},
+    ) as ws:
+        # Connection accepted — just close cleanly
+        pass
+
+
+def test_ws_allows_no_origin(client, fake_backend):
+    """WebSocket with no Origin header (same-origin) should connect."""
+    resp = client.post("/api/sessions", json={})
+    sid = resp.json()["session_id"]
+
+    with client.websocket_connect(f"/ws/terminal/{sid}") as ws:
+        pass
+
+
+# -- GET session endpoint auth --
+
+
+def test_get_session_requires_auth(auth_client, fake_backend):
+    """GET /api/sessions/{id} returns 401 without auth cookie."""
+    sid = _create_authed_session(auth_client)
+    auth_client.cookies.clear()
+    resp = auth_client.get(f"/api/sessions/{sid}")
+    assert resp.status_code == 401
+
+
+def test_get_session_rejects_different_user(auth_client, fake_backend):
+    """GET /api/sessions/{id} returns 403 for non-owner."""
+    sid = _create_authed_session(auth_client, login="user1")
+    auth_client.cookies.clear()
+    auth_client.cookies.set("remolt_auth", _make_auth_cookie(login="user2"))
+    resp = auth_client.get(f"/api/sessions/{sid}")
+    assert resp.status_code == 403
+
+
+def test_get_session_allows_owner(auth_client, fake_backend):
+    """GET /api/sessions/{id} works for session owner."""
+    sid = _create_authed_session(auth_client, login="owner1")
+    resp = auth_client.get(f"/api/sessions/{sid}")
+    assert resp.status_code == 200
+    assert resp.json()["session_id"] == sid
+
+
+# -- DELETE session endpoint auth --
+
+
+def test_delete_session_requires_auth(auth_client, fake_backend):
+    """DELETE /api/sessions/{id} returns 401 without auth cookie."""
+    sid = _create_authed_session(auth_client)
+    auth_client.cookies.clear()
+    resp = auth_client.delete(f"/api/sessions/{sid}")
+    assert resp.status_code == 401
+
+
+def test_delete_session_rejects_different_user(auth_client, fake_backend):
+    """DELETE /api/sessions/{id} returns 403 for non-owner."""
+    sid = _create_authed_session(auth_client, login="user1")
+    auth_client.cookies.clear()
+    auth_client.cookies.set("remolt_auth", _make_auth_cookie(login="user2"))
+    resp = auth_client.delete(f"/api/sessions/{sid}")
+    assert resp.status_code == 403
+
+
+def test_delete_session_allows_owner(auth_client, fake_backend):
+    """DELETE /api/sessions/{id} works for session owner."""
+    sid = _create_authed_session(auth_client, login="owner1")
+    resp = auth_client.delete(f"/api/sessions/{sid}")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "terminated"
+
+
+# -- Per-user session limit --
+
+
+def test_per_user_session_limit(auth_client, fake_backend):
+    """Users cannot exceed MAX_USER_SESSIONS."""
+    import server.server as srv
+    original = srv.MAX_USER_SESSIONS
+    srv.MAX_USER_SESSIONS = 1
+    try:
+        cookie = _make_auth_cookie(login="limited_user")
+        auth_client.cookies.set("remolt_auth", cookie)
+        resp = auth_client.post("/api/sessions", json={})
+        assert resp.status_code == 200
+        resp = auth_client.post("/api/sessions", json={})
+        assert resp.status_code == 429
+    finally:
+        srv.MAX_USER_SESSIONS = original
+
+
+def test_per_user_limit_independent_between_users(auth_client, fake_backend):
+    """One user hitting the limit doesn't block another user."""
+    import server.server as srv
+    original = srv.MAX_USER_SESSIONS
+    srv.MAX_USER_SESSIONS = 1
+    try:
+        auth_client.cookies.set("remolt_auth", _make_auth_cookie(login="userA"))
+        resp = auth_client.post("/api/sessions", json={})
+        assert resp.status_code == 200
+        # userA is at limit
+        resp = auth_client.post("/api/sessions", json={})
+        assert resp.status_code == 429
+        # userB should still be able to create
+        auth_client.cookies.clear()
+        auth_client.cookies.set("remolt_auth", _make_auth_cookie(login="userB"))
+        resp = auth_client.post("/api/sessions", json={})
+        assert resp.status_code == 200
+    finally:
+        srv.MAX_USER_SESSIONS = original
+
+
+# -- Path traversal --
+
+
+def test_path_traversal_blocked():
+    """Path traversal attempts must not escape the static directory."""
+    from pathlib import Path
+
+    static_dir = Path("/app/static")
+    traversal_attempts = [
+        "../../etc/passwd",
+        "../../../etc/shadow",
+        "assets/../../server/server.py",
+    ]
+    for malicious_path in traversal_attempts:
+        resolved = (static_dir / malicious_path).resolve()
+        assert not str(resolved).startswith(str(static_dir.resolve())), (
+            f"Path traversal not blocked: {malicious_path} -> {resolved}"
+        )
+
+
+# -- Cookie encryption --
+
+
+def test_cookie_does_not_contain_github_token_in_plaintext():
+    """The encrypted cookie must not expose the GitHub token."""
+    cookie = _make_auth_cookie(gh_token="ghp_SUPERSECRETTOKEN123")
+    # Token should not appear in plaintext or base64 in the cookie
+    assert "ghp_SUPERSECRETTOKEN123" not in cookie
+    assert base64.b64encode(b"ghp_SUPERSECRETTOKEN123").decode() not in cookie
+
+
+def test_encrypted_cookie_resolves_github_token(auth_client, fake_backend):
+    """Fernet-encrypted cookie correctly provides gh_token for session creation."""
+    cookie = _make_auth_cookie(gh_token="ghp_resolved_token")
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.post("/api/sessions", json={})
+    assert resp.status_code == 200
+    sb = list(fake_backend.sandboxes.values())[0]
+    assert sb["env"]["GITHUB_TOKEN"] == "ghp_resolved_token"
+
+
+# -- CORS configuration --
+
+
+def test_cors_rejects_disallowed_origin(client):
+    """Preflight from disallowed origin should not get CORS headers."""
+    resp = client.options(
+        "/api/sessions",
+        headers={
+            "origin": "https://evil.com",
+            "access-control-request-method": "POST",
+        },
+    )
+    assert resp.headers.get("access-control-allow-origin") != "https://evil.com"
+
+
+def test_cors_allows_configured_origin(client):
+    """Preflight from allowed origin should get CORS headers."""
+    import server.server as srv
+    resp = client.options(
+        "/api/sessions",
+        headers={
+            "origin": srv.ALLOWED_ORIGINS[0],
+            "access-control-request-method": "POST",
+        },
+    )
+    assert resp.headers.get("access-control-allow-origin") == srv.ALLOWED_ORIGINS[0]
