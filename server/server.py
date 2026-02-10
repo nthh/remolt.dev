@@ -434,6 +434,7 @@ class K8sBackend(SandboxBackend):
                 },
             },
             "spec": {
+                "hostname": "sandbox",
                 "restartPolicy": "Never",
                 "containers": [{
                     "name": "sandbox",
