@@ -677,22 +677,19 @@ async def lifespan(app: FastAPI):
     yield
     cleanup_task.cancel()
     warm_task.cancel()
-    # Drain warm pool
+    # Drain warm pool (unused pre-warmed pods) but keep session pods alive
+    # for recovery after restart. Session pods have remolt.session-id labels
+    # and will be reclaimed by recover_sessions() on next startup.
     while not warm_pool.empty():
         try:
             sandbox_id = warm_pool.get_nowait()
             await backend.destroy(sandbox_id)
         except Exception:
             pass
-    for sid in list(sessions):
-        s = sessions.pop(sid, None)
-        if s:
-            duration = time.time() - s.created_at
-            await backend.destroy(s.sandbox_id)
-            emit("session.ended", session_id=sid, reason="shutdown", duration_s=round(duration))
+    save_sessions()
     await backend.close()
-    emit("server.stopped")
-    logger.info("Remolt server stopped")
+    emit("server.stopped", preserved_sessions=len(sessions))
+    logger.info(f"Remolt server stopped — {len(sessions)} session(s) preserved for recovery")
 
 
 # ---------------------------------------------------------------------------

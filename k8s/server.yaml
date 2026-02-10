@@ -48,6 +48,8 @@ spec:
               value: "2"
             - name: REMOLT_EVENTS_LOG
               value: /data/events.jsonl
+            - name: REMOLT_SESSIONS_FILE
+              value: /data/sessions.json
           volumeMounts:
             - name: data
               mountPath: /data
