@@ -57,6 +57,7 @@ STATIC_DIR = os.getenv("REMOLT_STATIC_DIR", "")
 MAX_IDLE_SECONDS = int(os.getenv("REMOLT_MAX_IDLE_SECONDS", "3600"))
 CLEANUP_INTERVAL = int(os.getenv("REMOLT_CLEANUP_INTERVAL", "60"))
 MAX_SESSIONS = int(os.getenv("REMOLT_MAX_SESSIONS", "10"))
+MAX_USER_SESSIONS = int(os.getenv("REMOLT_MAX_USER_SESSIONS", "2"))
 WARM_POOL_SIZE = int(os.getenv("REMOLT_WARM_POOL", "0"))
 NAMESPACE = os.getenv("REMOLT_NAMESPACE", "remolt")
 
@@ -65,6 +66,7 @@ GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "")
 COOKIE_SECRET = os.getenv("COOKIE_SECRET", secrets.token_hex(32))
 AUTH_REQUIRED = bool(GITHUB_CLIENT_ID)
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("REMOLT_ALLOWED_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
 
 logger = logging.getLogger("remolt")
 logging.basicConfig(
@@ -740,7 +742,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Remolt", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -889,7 +891,7 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
     resp = RedirectResponse("/?authed=1")
     resp.set_cookie(
         "remolt_auth", _sign_cookie(payload),
-        httponly=True, samesite="lax", max_age=86400,
+        httponly=True, secure=True, samesite="lax", max_age=86400,
     )
     resp.delete_cookie("oauth_state")
     emit("auth.login", login=user.get("login", ""))
@@ -945,6 +947,11 @@ async def api_create_session(request: Request, body: CreateSessionReq):
     if len(sessions) >= MAX_SESSIONS:
         raise HTTPException(429, "Max sessions reached")
 
+    if AUTH_REQUIRED:
+        user_count = sum(1 for s in sessions.values() if s.owner == user.login and s.status == Status.RUNNING)
+        if user_count >= MAX_USER_SESSIONS:
+            raise HTTPException(429, f"Max {MAX_USER_SESSIONS} sessions per user")
+
     sid = secrets.token_urlsafe(32)
     env: dict[str, str] = {"TERM": "xterm-256color"}
     if body.repo_url:
@@ -990,20 +997,27 @@ async def api_create_session(request: Request, body: CreateSessionReq):
 
 
 @app.get("/api/sessions/{session_id}", response_model=SessionResp)
-async def api_get_session(session_id: str):
+async def api_get_session(request: Request, session_id: str):
+    user = require_auth(request)
     s = sessions.get(session_id)
     if not s:
         raise HTTPException(404, "Session not found")
+    if AUTH_REQUIRED and s.owner and s.owner != user.login:
+        raise HTTPException(403, "Not authorized")
     return SessionResp(
         session_id=s.session_id, status=s.status.value, ws_url=f"/ws/terminal/{s.session_id}"
     )
 
 
 @app.delete("/api/sessions/{session_id}")
-async def api_delete_session(session_id: str):
-    s = sessions.pop(session_id, None)
+async def api_delete_session(request: Request, session_id: str):
+    user = require_auth(request)
+    s = sessions.get(session_id)
     if not s:
         raise HTTPException(404, "Session not found")
+    if AUTH_REQUIRED and s.owner and s.owner != user.login:
+        raise HTTPException(403, "Not authorized")
+    sessions.pop(session_id)
     duration = time.time() - s.created_at
     await backend.destroy(s.sandbox_id)
     emit("session.ended", session_id=session_id, reason="user", duration_s=round(duration))
@@ -1024,7 +1038,7 @@ async def ws_terminal(ws: WebSocket, session_id: str):
         return
 
     # Verify the connecting user owns this session
-    if AUTH_REQUIRED and s.owner:
+    if AUTH_REQUIRED:
         user = await get_current_user(ws)
         if not user or user.login != s.owner:
             await ws.close(code=4003, reason="Not authorized")
