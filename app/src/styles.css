@@ -237,6 +237,12 @@ html, body, #root {
   background: var(--green);
 }
 
+.version-tag {
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+
 .auth-banner {
   display: flex;
   align-items: center;

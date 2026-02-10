@@ -52,6 +52,14 @@ try:
 except ImportError:
     pass
 
+def _read_version() -> str:
+    for p in [Path(__file__).resolve().parent / "VERSION", Path(__file__).resolve().parent.parent / "VERSION"]:
+        if p.exists():
+            return p.read_text().strip()
+    return "dev"
+
+VERSION = _read_version()
+
 SANDBOX_IMAGE = os.getenv("REMOLT_SANDBOX_IMAGE", "remolt-sandbox")
 STATIC_DIR = os.getenv("REMOLT_STATIC_DIR", "")
 MAX_IDLE_SECONDS = int(os.getenv("REMOLT_MAX_IDLE_SECONDS", "3600"))

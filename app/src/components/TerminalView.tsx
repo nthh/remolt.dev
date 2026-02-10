@@ -39,6 +39,7 @@ const handlePasteCode = async () => {
         <div className="session-info">
           <span className="status-dot" />
           <span className="session-id">{session?.session_id}</span>
+          <span className="version-tag">v{__APP_VERSION__}</span>
         </div>
         <button className="btn btn-danger" onClick={destroySession}>
           End Session
