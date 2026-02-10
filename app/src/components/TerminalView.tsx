@@ -35,15 +35,15 @@ export function TerminalView() {
           <span className="toolbar-sep" />
           <button
             className="toolbar-btn"
-            onClick={() => sendText('\x1b[5~')}
-            title="Scroll up (Page Up)"
+            onClick={() => sendText('\x02\x1b[5~')}
+            title="Scroll up (tmux scrollback)"
           >
             &#x25B2;
           </button>
           <button
             className="toolbar-btn"
             onClick={() => sendText('\x1b[6~')}
-            title="Scroll down (Page Down)"
+            title="Scroll down"
           >
             &#x25BC;
           </button>

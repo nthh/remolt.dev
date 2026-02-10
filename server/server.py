@@ -201,8 +201,8 @@ class SandboxBackend(abc.ABC):
         """Inject environment variables into a running sandbox and run setup."""
 
     @abc.abstractmethod
-    async def relabel(self, sandbox_id: str, session_id: str) -> None:
-        """Update the session-id label on a running sandbox."""
+    async def relabel(self, sandbox_id: str, session_id: str, owner: str = "") -> None:
+        """Update the session-id and owner labels on a running sandbox."""
 
     @abc.abstractmethod
     async def close(self) -> None:
@@ -346,7 +346,7 @@ class DockerBackend(SandboxBackend):
         )
         await exec_inst.start(detach=True)
 
-    async def relabel(self, sandbox_id: str, session_id: str) -> None:
+    async def relabel(self, sandbox_id: str, session_id: str, owner: str = "") -> None:
         pass  # Docker doesn't support label updates on running containers
 
     async def close(self) -> None:
@@ -512,6 +512,7 @@ class K8sBackend(SandboxBackend):
             result.append({
                 "id": pod["metadata"]["name"],
                 "session_id": labels.get("remolt.session-id", ""),
+                "owner": labels.get("remolt.owner", ""),
                 "running": phase == "Running",
             })
         return result
@@ -577,10 +578,13 @@ class K8sBackend(SandboxBackend):
             async for frame in ws:
                 pass
 
-    async def relabel(self, sandbox_id: str, session_id: str) -> None:
+    async def relabel(self, sandbox_id: str, session_id: str, owner: str = "") -> None:
+        labels: dict[str, str] = {"remolt.session-id": session_id}
+        if owner:
+            labels["remolt.owner"] = owner
         resp = await self._client.patch(
             f"/api/v1/namespaces/{self._namespace}/pods/{sandbox_id}",
-            json={"metadata": {"labels": {"remolt.session-id": session_id}}},
+            json={"metadata": {"labels": labels}},
             headers={"Content-Type": "application/merge-patch+json"},
         )
         if resp.status_code != 200:
@@ -622,7 +626,7 @@ async def recover_sessions() -> None:
             last_activity=time.time(),
             status=Status.RUNNING,
             has_repo=meta.get("has_repo", False),
-            owner=meta.get("owner", ""),
+            owner=sb.get("owner") or meta.get("owner", ""),
         )
         live_sids.add(sid)
         logger.info(f"Recovered session {sid}")
@@ -990,6 +994,11 @@ async def api_create_session(request: Request, body: CreateSessionReq):
         has_repo=bool(body.repo_url),
         owner=user.login,
     )
+    # Persist owner in pod labels so sessions survive server restarts
+    try:
+        await backend.relabel(sandbox_id, sid, owner=user.login)
+    except Exception:
+        pass  # Non-fatal: session works, just won't survive a restart with owner info
     emit("session.created", session_id=sid, has_repo=bool(body.repo_url), user=user.login)
     save_sessions()
     return SessionResp(session_id=sid, status="running", ws_url=f"/ws/terminal/{sid}")
@@ -1045,7 +1054,10 @@ async def ws_terminal(ws: WebSocket, session_id: str):
     # Verify the connecting user owns this session
     if AUTH_REQUIRED:
         user = await get_current_user(ws)
-        if not user or user.login != s.owner:
+        if not user:
+            await ws.close(code=4003, reason="Not authorized")
+            return
+        if s.owner and user.login != s.owner:
             await ws.close(code=4003, reason="Not authorized")
             return
 

@@ -89,13 +89,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       }
 
       setPhase('reconnecting');
-      try {
-        const res = await fetch(`/api/sessions/${info.session_id}`);
-        if (!res.ok) throw new Error('gone');
-        const data: SessionInfo = await res.json();
-        setSession(data);
-        setPhase('connected');
-      } catch {
+      // Retry a few times — server may be restarting during a deploy
+      let recovered = false;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          const res = await fetch(`/api/sessions/${info.session_id}`);
+          if (res.ok) {
+            const data: SessionInfo = await res.json();
+            setSession(data);
+            setPhase('connected');
+            recovered = true;
+            break;
+          }
+          if (res.status === 404) break; // Session genuinely gone
+        } catch {
+          // Network error — server might be restarting
+        }
+        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+      }
+      if (!recovered) {
         localStorage.removeItem(SESSION_KEY);
         setPhase('idle');
       }
