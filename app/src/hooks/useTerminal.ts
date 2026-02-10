@@ -58,6 +58,7 @@ export function useTerminal(wsUrl: string | null) {
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 14,
+      scrollback: 10000,
       fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
       theme: {
         background: '#1a1b26',
@@ -213,5 +214,13 @@ export function useTerminal(wsUrl: string | null) {
     termRef.current?.focus();
   }, []);
 
-  return { containerRef, authUrl, dismissAuth, sendText };
+  const scrollUp = useCallback(() => {
+    termRef.current?.scrollPages(-1);
+  }, []);
+
+  const scrollDown = useCallback(() => {
+    termRef.current?.scrollPages(1);
+  }, []);
+
+  return { containerRef, authUrl, dismissAuth, sendText, scrollUp, scrollDown };
 }

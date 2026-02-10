@@ -3,7 +3,7 @@ import { useTerminal } from '../hooks/useTerminal';
 
 export function TerminalView() {
   const { session, wsUrl, destroySession } = useSession();
-  const { containerRef, authUrl, dismissAuth, sendText } = useTerminal(wsUrl);
+  const { containerRef, authUrl, dismissAuth, sendText, scrollUp, scrollDown } = useTerminal(wsUrl);
 
   const handlePasteCode = async () => {
     try {
@@ -24,6 +24,30 @@ export function TerminalView() {
           <span className="status-dot" />
           <span>Session</span>
           <span className="session-id">{session?.session_id}</span>
+        </div>
+        <div className="terminal-toolbar">
+          <button
+            className="toolbar-btn"
+            onClick={() => sendText('\x1b')}
+            title="Send Escape (stop current operation)"
+          >
+            Esc
+          </button>
+          <span className="toolbar-sep" />
+          <button
+            className="toolbar-btn"
+            onClick={scrollUp}
+            title="Scroll up (Page Up)"
+          >
+            &#x25B2;
+          </button>
+          <button
+            className="toolbar-btn"
+            onClick={scrollDown}
+            title="Scroll down (Page Down)"
+          >
+            &#x25BC;
+          </button>
         </div>
         <button className="btn btn-danger" onClick={destroySession}>
           End Session
