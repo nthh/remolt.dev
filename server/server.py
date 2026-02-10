@@ -592,22 +592,22 @@ async def recover_sessions() -> None:
     live_sids: set[str] = set()
     for sb in managed:
         sid = sb["session_id"]
-        if sb["running"] and sid:
-            meta = saved.get(sid, {})
-            sessions[sid] = Session(
-                session_id=sid,
-                sandbox_id=sb["id"],
-                created_at=meta.get("created_at", time.time()),
-                last_activity=time.time(),
-                status=Status.RUNNING,
-                has_repo=meta.get("has_repo", False),
-            )
-            live_sids.add(sid)
-            logger.info(f"Recovered session {sid}")
-            emit("session.recovered", session_id=sid)
-        else:
+        if not sb["running"] or not sid or sid.startswith("warm-"):
             await backend.destroy(sb["id"])
-            logger.info(f"Cleaned up dead sandbox {sb['id']}")
+            logger.info(f"Cleaned up orphan sandbox {sb['id']}")
+            continue
+        meta = saved.get(sid, {})
+        sessions[sid] = Session(
+            session_id=sid,
+            sandbox_id=sb["id"],
+            created_at=meta.get("created_at", time.time()),
+            last_activity=time.time(),
+            status=Status.RUNNING,
+            has_repo=meta.get("has_repo", False),
+        )
+        live_sids.add(sid)
+        logger.info(f"Recovered session {sid}")
+        emit("session.recovered", session_id=sid)
 
     if live_sids:
         save_sessions()
