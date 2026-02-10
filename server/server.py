@@ -327,7 +327,9 @@ class DockerBackend(SandboxBackend):
             'git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"',
             'if [ -n "$REPO_URL" ]; then git clone "$REPO_URL" /home/dev/workspace 2>/dev/null || true; fi',
             'if [ ! -d /home/dev/remolt-dev ]; then git clone https://github.com/nthh/remolt.dev.git /home/dev/remolt-dev 2>/dev/null || true; fi',
-            'mkdir -p /home/dev/.claude && echo \'{"permissions":{"allow":[],"deny":[]},"hasCompletedOnboarding":true}\' > /home/dev/.claude/settings.json',
+            'mkdir -p /home/dev/.claude',
+            """echo '{"hasCompletedOnboarding":true,"hasCompletedProjectOnboarding":true,"hasTrustDialogAccepted":true,"theme":"dark"}' > /home/dev/.claude.json""",
+            """echo '{"permissions":{"allow":[],"deny":[]}}' > /home/dev/.claude/settings.json""",
         ])
         exec_inst = await container.exec(
             cmd=["bash", "-c", script],
@@ -535,7 +537,9 @@ class K8sBackend(SandboxBackend):
             ' && git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"'
             ' && if [ -n "$REPO_URL" ]; then git clone "$REPO_URL" /home/dev/workspace 2>/dev/null || true; fi'
             ' && if [ ! -d /home/dev/remolt-dev ]; then git clone https://github.com/nthh/remolt.dev.git /home/dev/remolt-dev 2>/dev/null || true; fi'
-            " && mkdir -p /home/dev/.claude && echo '{\"permissions\":{\"allow\":[],\"deny\":[]},\"hasCompletedOnboarding\":true}' > /home/dev/.claude/settings.json"
+            ' && mkdir -p /home/dev/.claude'
+            """ && echo '{"hasCompletedOnboarding":true,"hasCompletedProjectOnboarding":true,"hasTrustDialogAccepted":true,"theme":"dark"}' > /home/dev/.claude.json"""
+            """ && echo '{"permissions":{"allow":[],"deny":[]}}' > /home/dev/.claude/settings.json"""
         )
         params = f"command=bash&command=-c&command={quote(script)}&stderr=true&stdout=true"
         url = (

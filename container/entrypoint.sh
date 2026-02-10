@@ -5,15 +5,22 @@ set -e
 git config --global user.name "${GIT_USER_NAME:-Claude Dev}"
 git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"
 
-# Pre-configure Claude Code (skip onboarding prompts)
+# Pre-configure Claude Code (skip onboarding + theme prompts)
 mkdir -p /home/dev/.claude
+cat > /home/dev/.claude.json << 'CLAUDEJSON'
+{
+  "hasCompletedOnboarding": true,
+  "hasCompletedProjectOnboarding": true,
+  "hasTrustDialogAccepted": true,
+  "theme": "dark"
+}
+CLAUDEJSON
 cat > /home/dev/.claude/settings.json << 'SETTINGS'
 {
   "permissions": {
     "allow": [],
     "deny": []
-  },
-  "hasCompletedOnboarding": true
+  }
 }
 SETTINGS
 
