@@ -196,6 +196,10 @@ class SandboxBackend(abc.ABC):
         """Inject environment variables into a running sandbox and run setup."""
 
     @abc.abstractmethod
+    async def relabel(self, sandbox_id: str, session_id: str) -> None:
+        """Update the session-id label on a running sandbox."""
+
+    @abc.abstractmethod
     async def close(self) -> None:
         """Shut down the backend."""
 
@@ -330,6 +334,9 @@ class DockerBackend(SandboxBackend):
             environment=env,
         )
         await exec_inst.start(detach=True)
+
+    async def relabel(self, sandbox_id: str, session_id: str) -> None:
+        pass  # Docker doesn't support label updates on running containers
 
     async def close(self) -> None:
         await self._docker.close()
@@ -548,6 +555,15 @@ class K8sBackend(SandboxBackend):
             async for frame in ws:
                 pass
 
+    async def relabel(self, sandbox_id: str, session_id: str) -> None:
+        resp = await self._client.patch(
+            f"/api/v1/namespaces/{self._namespace}/pods/{sandbox_id}",
+            json={"metadata": {"labels": {"remolt.session-id": session_id}}},
+            headers={"Content-Type": "application/merge-patch+json"},
+        )
+        if resp.status_code != 200:
+            logger.warning(f"Failed to relabel pod {sandbox_id}: {resp.status_code}")
+
     async def close(self) -> None:
         await self._client.aclose()
 
@@ -645,11 +661,12 @@ async def warm_pool_loop() -> None:
         await asyncio.sleep(5)
 
 
-async def claim_warm_sandbox(env: dict[str, str]) -> str | None:
+async def claim_warm_sandbox(session_id: str, env: dict[str, str]) -> str | None:
     """Try to claim a pre-warmed sandbox. Returns sandbox_id or None."""
     try:
         sandbox_id = warm_pool.get_nowait()
         await backend.inject_env(sandbox_id, env)
+        await backend.relabel(sandbox_id, session_id)
         logger.info(f"Claimed warm sandbox {sandbox_id} (pool size: {warm_pool.qsize()})")
         emit("warm_pool.claimed", sandbox_id=sandbox_id, pool_size=warm_pool.qsize())
         return sandbox_id
@@ -928,7 +945,7 @@ async def api_create_session(request: Request, body: CreateSessionReq):
         env["ANTHROPIC_API_KEY"] = body.api_key
 
     try:
-        sandbox_id = await claim_warm_sandbox(env)
+        sandbox_id = await claim_warm_sandbox(sid, env)
         if not sandbox_id:
             sandbox_id = await backend.create(sid, env)
     except Exception as e:
