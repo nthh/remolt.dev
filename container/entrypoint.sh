@@ -10,6 +10,7 @@ cat > /home/dev/.tmux.conf << 'TMUX'
 set -g mouse on
 set -g history-limit 10000
 set -g status off
+bind-key PPage copy-mode -eu
 TMUX
 
 # Pre-configure Claude Code (theme only — don't set hasCompletedOnboarding, it skips auth)
