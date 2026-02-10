@@ -5,6 +5,12 @@ set -e
 git config --global user.name "${GIT_USER_NAME:-Claude Dev}"
 git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"
 
+# tmux config — enable mouse scrolling and increase scrollback
+cat > /home/dev/.tmux.conf << 'TMUX'
+set -g mouse on
+set -g history-limit 10000
+TMUX
+
 # Pre-configure Claude Code (theme only — don't set hasCompletedOnboarding, it skips auth)
 mkdir -p /home/dev/.claude
 echo '{"theme":"dark"}' > /home/dev/.claude.json
