@@ -31,7 +31,7 @@ export function TerminalView() {
       </div>
       {authUrl && (
         <div className="auth-banner">
-          <span className="auth-label">&#x1f511; Authentication required</span>
+          <span className="auth-label">auth required</span>
           <a className="auth-link" href={authUrl} target="_blank" rel="noopener noreferrer">
             Open login &rarr;
           </a>
