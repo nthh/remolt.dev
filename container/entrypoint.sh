@@ -5,8 +5,9 @@ set -e
 git config --global user.name "${GIT_USER_NAME:-Claude Dev}"
 git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"
 
-# Pre-configure Claude Code permissions
+# Pre-configure Claude Code (theme only — don't set hasCompletedOnboarding, it skips auth)
 mkdir -p /home/dev/.claude
+echo '{"theme":"dark"}' > /home/dev/.claude.json
 cat > /home/dev/.claude/settings.json << 'SETTINGS'
 {
   "permissions": {
