@@ -320,12 +320,18 @@ class DockerBackend(SandboxBackend):
     async def inject_env(self, sandbox_id: str, env: dict[str, str]) -> None:
         container = self._docker.containers.container(sandbox_id)
         # Write env vars to a profile file, then run entrypoint setup
-        lines = [f"export {k}={shlex.quote(v)}" for k, v in env.items()]
+        # Separate secrets from non-secret env for setup
+        secret_keys = {"GITHUB_TOKEN", "ANTHROPIC_API_KEY"}
+        safe_lines = [f"export {k}={shlex.quote(v)}" for k, v in env.items() if k not in secret_keys]
+        secret_lines = [f"export {k}={shlex.quote(v)}" for k, v in env.items() if k in secret_keys]
         script = " && ".join([
-            f"echo {shlex.quote(chr(10).join(lines))} > /home/dev/.remolt_env",
-            "echo 'source /home/dev/.remolt_env 2>/dev/null' >> /home/dev/.bashrc",
-            "source /home/dev/.remolt_env",
-            # Re-run entrypoint logic (git config + clone + claude pre-config)
+            # Non-secret env goes in .bashrc (TERM, GIT_USER_NAME, etc.)
+            f"echo {shlex.quote(chr(10).join(safe_lines))} >> /home/dev/.bashrc",
+            # Secrets written to tmpfs, sourced from .bashrc, auto-deleted on read
+            f"echo {shlex.quote(chr(10).join(secret_lines))} > /dev/shm/.env",
+            "chmod 600 /dev/shm/.env",
+            "echo 'if [ -f /dev/shm/.env ]; then source /dev/shm/.env; rm -f /dev/shm/.env; fi' >> /home/dev/.bashrc",
+            "source /home/dev/.bashrc",
             'git config --global user.name "${GIT_USER_NAME:-Claude Dev}"',
             'git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"',
             'if [ -n "$REPO_URL" ]; then git clone "$REPO_URL" /home/dev/workspace 2>/dev/null || true; fi',
@@ -335,7 +341,6 @@ class DockerBackend(SandboxBackend):
         ])
         exec_inst = await container.exec(
             cmd=["bash", "-c", script],
-            environment=env,
         )
         await exec_inst.start(detach=True)
 
@@ -535,11 +540,15 @@ class K8sBackend(SandboxBackend):
         import websockets
         from urllib.parse import quote
 
-        lines = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env.items())
+        secret_keys = {"GITHUB_TOKEN", "ANTHROPIC_API_KEY"}
+        safe_lines = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env.items() if k not in secret_keys)
+        secret_lines = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env.items() if k in secret_keys)
         script = (
-            f"echo {shlex.quote(lines)} > /home/dev/.remolt_env"
-            " && echo 'source /home/dev/.remolt_env 2>/dev/null' >> /home/dev/.bashrc"
-            " && source /home/dev/.remolt_env"
+            f"echo {shlex.quote(safe_lines)} >> /home/dev/.bashrc"
+            f" && echo {shlex.quote(secret_lines)} > /dev/shm/.env"
+            " && chmod 600 /dev/shm/.env"
+            """ && echo 'if [ -f /dev/shm/.env ]; then source /dev/shm/.env; rm -f /dev/shm/.env; fi' >> /home/dev/.bashrc"""
+            " && source /home/dev/.bashrc"
             ' && git config --global user.name "${GIT_USER_NAME:-Claude Dev}"'
             ' && git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"'
             ' && if [ -n "$REPO_URL" ]; then git clone "$REPO_URL" /home/dev/workspace 2>/dev/null || true; fi'
@@ -955,10 +964,15 @@ async def api_create_session(request: Request, body: CreateSessionReq):
     if body.api_key:
         env["ANTHROPIC_API_KEY"] = body.api_key
 
+    SECRET_KEYS = {"GITHUB_TOKEN", "ANTHROPIC_API_KEY"}
+    safe_env = {k: v for k, v in env.items() if k not in SECRET_KEYS}
+
     try:
         sandbox_id = await claim_warm_sandbox(sid, env)
         if not sandbox_id:
-            sandbox_id = await backend.create(sid, env)
+            # Cold start: create with safe env only, then inject secrets via exec
+            sandbox_id = await backend.create(sid, safe_env)
+            await backend.inject_env(sandbox_id, env)
     except Exception as e:
         logger.error(f"Failed to create sandbox: {e}")
         raise HTTPException(500, "Failed to create session. Please try again.")
