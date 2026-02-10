@@ -160,14 +160,28 @@ export function useTerminal(wsUrl: string | null) {
     const handleClick = () => term.focus();
     el.addEventListener('click', handleClick);
 
-    const ro = new ResizeObserver(() => {
+    const refit = () => {
       fit.fit();
       const dims = fit.proposeDimensions();
       if (dims && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
       }
-    });
+    };
+
+    const ro = new ResizeObserver(refit);
     ro.observe(el);
+
+    // Mobile: resize terminal container to fit above virtual keyboard
+    const vv = window.visualViewport;
+    const handleViewport = () => {
+      if (!vv) return;
+      const container = el.closest('.terminal-container') as HTMLElement;
+      if (container) {
+        container.style.height = `${vv.height}px`;
+      }
+      refit();
+    };
+    vv?.addEventListener('resize', handleViewport);
 
     return () => {
       intentionalClose = true;
@@ -175,6 +189,7 @@ export function useTerminal(wsUrl: string | null) {
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
       el.removeEventListener('click', handleClick);
       ro.disconnect();
+      vv?.removeEventListener('resize', handleViewport);
       if (ws) ws.close();
       wsRef.current = null;
       termRef.current = null;
