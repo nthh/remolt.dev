@@ -6,18 +6,11 @@ export function TerminalView() {
   const { containerRef, authUrl, dismissAuth, sendText } = useTerminal(wsUrl);
 
   const handlePaste = async () => {
-    let text: string | null = null;
     try {
-      text = await navigator.clipboard.readText();
+      const text = await navigator.clipboard.readText();
+      if (text) sendText(text);
     } catch {
-      // ignore — will fall through to prompt
-    }
-    if (!text) {
-      text = window.prompt('Paste here:');
-    }
-    if (text) {
-      // Defer to next tick — iOS can lose focus during clipboard permission dialog
-      setTimeout(() => sendText(text!), 0);
+      // Clipboard API denied
     }
   };
 
