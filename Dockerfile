@@ -9,7 +9,7 @@ RUN npm run build
 # Stage 2: Server with built frontend baked in
 FROM python:3.12-slim
 WORKDIR /app
-RUN pip install --no-cache-dir fastapi uvicorn[standard] aiodocker httpx websockets
+RUN pip install --no-cache-dir fastapi uvicorn[standard] aiodocker httpx websockets cryptography
 COPY server/server.py .
 COPY --from=frontend /build/dist /app/static
 
