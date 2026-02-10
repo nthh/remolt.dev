@@ -5,11 +5,8 @@ set -e
 git config --global user.name "${GIT_USER_NAME:-Claude Dev}"
 git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"
 
-# Pre-configure Claude Code (skip onboarding + theme prompts, disable auto-update)
+# Pre-configure Claude Code permissions
 mkdir -p /home/dev/.claude
-cat >> /home/dev/.bashrc << 'ENVVARS'
-export CLAUDE_CODE_DISABLE_AUTO_UPDATE=1
-ENVVARS
 cat > /home/dev/.claude/settings.json << 'SETTINGS'
 {
   "permissions": {

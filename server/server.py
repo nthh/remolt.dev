@@ -330,7 +330,6 @@ class DockerBackend(SandboxBackend):
             'if [ ! -d /home/dev/remolt-dev ]; then git clone https://github.com/nthh/remolt.dev.git /home/dev/remolt-dev 2>/dev/null || true; fi',
             'mkdir -p /home/dev/.claude',
             """echo '{"permissions":{"allow":[],"deny":[]}}' > /home/dev/.claude/settings.json""",
-            'grep -q CLAUDE_CODE_DISABLE_AUTO_UPDATE /home/dev/.bashrc || echo "export CLAUDE_CODE_DISABLE_AUTO_UPDATE=1" >> /home/dev/.bashrc',
         ])
         exec_inst = await container.exec(
             cmd=["bash", "-c", script],
@@ -542,7 +541,6 @@ class K8sBackend(SandboxBackend):
             ' && if [ ! -d /home/dev/remolt-dev ]; then git clone https://github.com/nthh/remolt.dev.git /home/dev/remolt-dev 2>/dev/null || true; fi'
             ' && mkdir -p /home/dev/.claude'
             """ && echo '{"permissions":{"allow":[],"deny":[]}}' > /home/dev/.claude/settings.json"""
-            ' && grep -q CLAUDE_CODE_DISABLE_AUTO_UPDATE /home/dev/.bashrc || echo "export CLAUDE_CODE_DISABLE_AUTO_UPDATE=1" >> /home/dev/.bashrc'
         )
         params = f"command=bash&command=-c&command={quote(script)}&stderr=true&stdout=true"
         url = (

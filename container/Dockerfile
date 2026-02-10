@@ -34,9 +34,10 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user with passwordless sudo
+# Create non-root user with passwordless sudo + npm global write access
 RUN useradd -m -s /bin/bash dev \
-    && echo "dev ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+    && echo "dev ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers \
+    && chown -R dev:dev /usr/lib/node_modules /usr/bin
 
 WORKDIR /home/dev
 
