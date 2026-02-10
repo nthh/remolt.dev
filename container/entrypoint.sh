@@ -49,7 +49,8 @@ If you encounter a bug in the sandbox itself (terminal, auth, UI, server):
 
 1. The source is at `~/remolt-dev/`
 2. Fix the issue there
-3. Submit a PR: `cd ~/remolt-dev && gh pr create`
+3. Fork first if you don't have push access: `cd ~/remolt-dev && gh repo fork --remote`
+4. Submit a PR: `gh pr create`
 
 See `~/remolt-dev/CLAUDE.md` for full architecture details and conventions.
 CLAUDEMD
