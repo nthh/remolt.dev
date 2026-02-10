@@ -96,9 +96,27 @@ export function useTerminal(wsUrl: string | null) {
     });
 
     term.open(containerRef.current);
-    fit.fit();
-    term.focus();
     termRef.current = term;
+
+    // Debounced resize — prevents flooding tmux/Ink with rapid resize events
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const sendResize = (ws: WebSocket | null) => {
+      fit.fit();
+      const dims = fit.proposeDimensions();
+      if (dims && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
+      }
+    };
+    const debouncedRefit = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => sendResize(ws), 100);
+    };
+
+    // Defer initial fit to next frame so CSS flexbox layout has settled
+    requestAnimationFrame(() => {
+      fit.fit();
+      term.focus();
+    });
 
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
@@ -121,10 +139,8 @@ export function useTerminal(wsUrl: string | null) {
           ? '\x1b[32m● Reconnected\x1b[0m\r'
           : '\x1b[32m● Connected\x1b[0m\r');
         term.focus();
-        const dims = fit.proposeDimensions();
-        if (dims) {
-          ws!.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
-        }
+        // Re-fit and send accurate dimensions on every connect/reconnect
+        sendResize(ws);
       };
 
       ws.onmessage = (ev) => {
@@ -170,15 +186,7 @@ export function useTerminal(wsUrl: string | null) {
     const handleClick = () => term.focus();
     el.addEventListener('click', handleClick);
 
-    const refit = () => {
-      fit.fit();
-      const dims = fit.proposeDimensions();
-      if (dims && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
-      }
-    };
-
-    const ro = new ResizeObserver(refit);
+    const ro = new ResizeObserver(debouncedRefit);
     ro.observe(el);
 
     // Mobile: resize terminal container to fit above virtual keyboard
@@ -189,13 +197,14 @@ export function useTerminal(wsUrl: string | null) {
       if (container) {
         container.style.height = `${vv.height}px`;
       }
-      refit();
+      debouncedRefit();
     };
     vv?.addEventListener('resize', handleViewport);
 
     return () => {
       intentionalClose = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (resizeTimer) clearTimeout(resizeTimer);
       if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
       el.removeEventListener('click', handleClick);
       ro.disconnect();
