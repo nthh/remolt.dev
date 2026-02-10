@@ -1,17 +1,44 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: deny-sandbox-to-sandbox
+  name: sandbox-isolation
   namespace: remolt
 spec:
   podSelector:
     matchLabels:
-      app: remolt-sandbox
+      remolt.managed: "true"
   policyTypes:
     - Ingress
+    - Egress
   ingress:
-    # Allow traffic only from the server pod, deny all sandbox-to-sandbox
+    # Allow traffic only from the server pod (for exec attach)
     - from:
         - podSelector:
             matchLabels:
               app: remolt-server
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow public internet (HTTP/HTTPS/SSH)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Block private networks (prevents pod-to-pod and metadata access)
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 22

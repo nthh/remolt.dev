@@ -104,6 +104,7 @@ def save_sessions() -> None:
                 "created_at": s.created_at,
                 "last_activity": s.last_activity,
                 "has_repo": s.has_repo,
+                "owner": s.owner,
             }
             for s in sessions.values()
             if s.status == Status.RUNNING
@@ -321,7 +322,6 @@ class DockerBackend(SandboxBackend):
         # Write env vars to a profile file, then run entrypoint setup
         lines = [f"export {k}={shlex.quote(v)}" for k, v in env.items()]
         script = " && ".join([
-            "sudo hostname sandbox 2>/dev/null || true",
             f"echo {shlex.quote(chr(10).join(lines))} > /home/dev/.remolt_env",
             "echo 'source /home/dev/.remolt_env 2>/dev/null' >> /home/dev/.bashrc",
             "source /home/dev/.remolt_env",
@@ -448,6 +448,9 @@ class K8sBackend(SandboxBackend):
                         "requests": {"cpu": "250m", "memory": "512Mi"},
                         "limits": {"cpu": "2", "memory": "2Gi"},
                     },
+                    "securityContext": {
+                        "allowPrivilegeEscalation": False,
+                    },
                 }],
             },
         }
@@ -534,8 +537,7 @@ class K8sBackend(SandboxBackend):
 
         lines = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env.items())
         script = (
-            "sudo hostname sandbox 2>/dev/null || true"
-            f" && echo {shlex.quote(lines)} > /home/dev/.remolt_env"
+            f"echo {shlex.quote(lines)} > /home/dev/.remolt_env"
             " && echo 'source /home/dev/.remolt_env 2>/dev/null' >> /home/dev/.bashrc"
             " && source /home/dev/.remolt_env"
             ' && git config --global user.name "${GIT_USER_NAME:-Claude Dev}"'
@@ -608,6 +610,7 @@ async def recover_sessions() -> None:
             last_activity=time.time(),
             status=Status.RUNNING,
             has_repo=meta.get("has_repo", False),
+            owner=meta.get("owner", ""),
         )
         live_sids.add(sid)
         logger.info(f"Recovered session {sid}")
