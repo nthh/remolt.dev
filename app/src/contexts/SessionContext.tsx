@@ -142,6 +142,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
     localStorage.removeItem(SESSION_KEY);
     setSession(null);
+    setAutoLaunch(false);
     setPhase('idle');
     setError(null);
   }, [session]);

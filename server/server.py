@@ -319,6 +319,7 @@ class DockerBackend(SandboxBackend):
         # Write env vars to a profile file, then run entrypoint setup
         lines = [f"export {k}={v}" for k, v in env.items()]
         script = " && ".join([
+            "sudo hostname sandbox 2>/dev/null || true",
             f"echo '{chr(10).join(lines)}' > /home/dev/.remolt_env",
             "echo 'source /home/dev/.remolt_env 2>/dev/null' >> /home/dev/.bashrc",
             "source /home/dev/.remolt_env",
@@ -530,7 +531,8 @@ class K8sBackend(SandboxBackend):
 
         lines = "\n".join(f"export {k}={v}" for k, v in env.items())
         script = (
-            f"echo '{lines}' > /home/dev/.remolt_env"
+            "sudo hostname sandbox 2>/dev/null || true"
+            f" && echo '{lines}' > /home/dev/.remolt_env"
             " && echo 'source /home/dev/.remolt_env 2>/dev/null' >> /home/dev/.bashrc"
             " && source /home/dev/.remolt_env"
             ' && git config --global user.name "${GIT_USER_NAME:-Claude Dev}"'

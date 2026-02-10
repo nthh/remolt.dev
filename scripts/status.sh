@@ -42,12 +42,12 @@ else
   SESSION=0
   OTHER=0
   while read -r name ready status restarts age; do
-    if [[ "$name" == remolt-warm-* ]]; then
+    SID=$(kubectl -n "$NS" get pod "$name" -o jsonpath='{.metadata.labels.remolt\.session-id}' 2>/dev/null)
+    if [[ -z "$SID" || "$SID" == warm-* ]]; then
       ((WARM++))
       echo -e "  ${DIM}warm${RESET}    ${name}  ${DIM}${status}, ${age}${RESET}"
     else
       ((SESSION++))
-      SID=$(kubectl -n "$NS" get pod "$name" -o jsonpath='{.metadata.labels.remolt\.session-id}' 2>/dev/null)
       echo -e "  ${GREEN}session${RESET} ${name}  ${DIM}${status}, ${age}, sid=${SID:0:12}...${RESET}"
     fi
   done <<< "$SANDBOX_PODS"
