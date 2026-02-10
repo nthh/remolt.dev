@@ -28,7 +28,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install fastapi uvicorn httpx websockets aiodocker pytest pytest-asyncio
+      - run: pip install fastapi uvicorn httpx websockets aiodocker cryptography pytest pytest-asyncio
       - run: pytest tests/ -v
 
   changes:
