@@ -318,10 +318,12 @@ class DockerBackend(SandboxBackend):
             f"echo '{chr(10).join(lines)}' > /home/dev/.remolt_env",
             "echo 'source /home/dev/.remolt_env 2>/dev/null' >> /home/dev/.bashrc",
             "source /home/dev/.remolt_env",
-            # Re-run entrypoint logic (git config + clone)
+            # Re-run entrypoint logic (git config + clone + claude pre-config)
             'git config --global user.name "${GIT_USER_NAME:-Claude Dev}"',
             'git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"',
             'if [ -n "$REPO_URL" ]; then git clone "$REPO_URL" /home/dev/workspace 2>/dev/null || true; fi',
+            'if [ ! -d /home/dev/remolt-dev ]; then git clone https://github.com/nthh/remolt.dev.git /home/dev/remolt-dev 2>/dev/null || true; fi',
+            'mkdir -p /home/dev/.claude && echo \'{"permissions":{"allow":[],"deny":[]},"hasCompletedOnboarding":true}\' > /home/dev/.claude/settings.json',
         ])
         exec_inst = await container.exec(
             cmd=["bash", "-c", script],
@@ -525,6 +527,8 @@ class K8sBackend(SandboxBackend):
             ' && git config --global user.name "${GIT_USER_NAME:-Claude Dev}"'
             ' && git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"'
             ' && if [ -n "$REPO_URL" ]; then git clone "$REPO_URL" /home/dev/workspace 2>/dev/null || true; fi'
+            ' && if [ ! -d /home/dev/remolt-dev ]; then git clone https://github.com/nthh/remolt.dev.git /home/dev/remolt-dev 2>/dev/null || true; fi'
+            " && mkdir -p /home/dev/.claude && echo '{\"permissions\":{\"allow\":[],\"deny\":[]},\"hasCompletedOnboarding\":true}' > /home/dev/.claude/settings.json"
         )
         params = f"command=bash&command=-c&command={quote(script)}&stderr=true&stdout=true"
         url = (
@@ -775,7 +779,7 @@ async def auth_login(repo: bool = False):
     if not GITHUB_CLIENT_ID:
         raise HTTPException(501, "GitHub OAuth not configured")
     state = secrets.token_urlsafe(16)
-    scope = "read:user user:email"
+    scope = "read:user user:email public_repo"
     if repo:
         scope += " repo"
     url = (

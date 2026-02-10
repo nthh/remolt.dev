@@ -33,6 +33,8 @@ export function useTerminal(wsUrl: string | null) {
         for (const url of matches) {
           if (url.includes('oauth') || url.includes('authorize') || url.includes('login')) {
             setAuthUrl(url);
+            // Auto-open in new tab
+            window.open(url, '_blank', 'noopener,noreferrer');
             break;
           }
         }
@@ -85,6 +87,13 @@ export function useTerminal(wsUrl: string | null) {
     const webLinks = new WebLinksAddon();
     term.loadAddon(fit);
     term.loadAddon(webLinks);
+    // Let Ctrl+V / Cmd+V fall through to browser paste handling
+    term.attachCustomKeyEventHandler((ev) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === 'v') return false;
+      if ((ev.ctrlKey || ev.metaKey) && ev.key === 'c' && term.hasSelection()) return false;
+      return true;
+    });
+
     term.open(containerRef.current);
     fit.fit();
     term.focus();

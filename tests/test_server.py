@@ -569,7 +569,13 @@ def test_auth_login_redirects_to_github(client):
         location = resp.headers["location"]
         assert "github.com/login/oauth/authorize" in location
         assert "client_id=test-client-id" in location
-        assert "repo" not in location  # no repo scope by default
+        assert "public_repo" in location  # always included so users can create PRs
+        assert "scope=" in location
+        # full "repo" scope (private repo access) should NOT be included by default
+        from urllib.parse import urlparse, parse_qs
+        scope = parse_qs(urlparse(location).query)["scope"][0]
+        assert "public_repo" in scope
+        assert scope.split() == ["read:user", "user:email", "public_repo"]
     finally:
         srv.GITHUB_CLIENT_ID = original
 
