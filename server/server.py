@@ -21,6 +21,7 @@ import struct
 import sys
 import time
 import secrets
+import shlex
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -142,6 +143,7 @@ class Session:
     last_activity: float = field(default_factory=time.time)
     status: Status = Status.CREATING
     has_repo: bool = False
+    owner: str = ""
 
 
 sessions: dict[str, Session] = {}
@@ -317,10 +319,10 @@ class DockerBackend(SandboxBackend):
     async def inject_env(self, sandbox_id: str, env: dict[str, str]) -> None:
         container = self._docker.containers.container(sandbox_id)
         # Write env vars to a profile file, then run entrypoint setup
-        lines = [f"export {k}={v}" for k, v in env.items()]
+        lines = [f"export {k}={shlex.quote(v)}" for k, v in env.items()]
         script = " && ".join([
             "sudo hostname sandbox 2>/dev/null || true",
-            f"echo '{chr(10).join(lines)}' > /home/dev/.remolt_env",
+            f"echo {shlex.quote(chr(10).join(lines))} > /home/dev/.remolt_env",
             "echo 'source /home/dev/.remolt_env 2>/dev/null' >> /home/dev/.bashrc",
             "source /home/dev/.remolt_env",
             # Re-run entrypoint logic (git config + clone + claude pre-config)
@@ -434,6 +436,7 @@ class K8sBackend(SandboxBackend):
             },
             "spec": {
                 "hostname": "sandbox",
+                "automountServiceAccountToken": False,
                 "restartPolicy": "Never",
                 "containers": [{
                     "name": "sandbox",
@@ -529,10 +532,10 @@ class K8sBackend(SandboxBackend):
         import websockets
         from urllib.parse import quote
 
-        lines = "\n".join(f"export {k}={v}" for k, v in env.items())
+        lines = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env.items())
         script = (
             "sudo hostname sandbox 2>/dev/null || true"
-            f" && echo '{lines}' > /home/dev/.remolt_env"
+            f" && echo {shlex.quote(lines)} > /home/dev/.remolt_env"
             " && echo 'source /home/dev/.remolt_env 2>/dev/null' >> /home/dev/.bashrc"
             " && source /home/dev/.remolt_env"
             ' && git config --global user.name "${GIT_USER_NAME:-Claude Dev}"'
@@ -962,6 +965,7 @@ async def api_create_session(request: Request, body: CreateSessionReq):
         sandbox_id=sandbox_id,
         status=Status.RUNNING,
         has_repo=bool(body.repo_url),
+        owner=user.login,
     )
     emit("session.created", session_id=sid, has_repo=bool(body.repo_url), user=user.login)
     save_sessions()
@@ -1001,6 +1005,13 @@ async def ws_terminal(ws: WebSocket, session_id: str):
     if not s or s.status != Status.RUNNING:
         await ws.close(code=4004, reason="Session not found")
         return
+
+    # Verify the connecting user owns this session
+    if AUTH_REQUIRED and s.owner:
+        user = await get_current_user(ws)
+        if not user or user.login != s.owner:
+            await ws.close(code=4003, reason="Not authorized")
+            return
 
     await ws.accept()
     assert backend is not None
