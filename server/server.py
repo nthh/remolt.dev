@@ -619,6 +619,11 @@ async def recover_sessions() -> None:
             logger.info(f"Cleaned up orphan sandbox {sb['id']}")
             continue
         meta = saved.get(sid, {})
+        owner = sb.get("owner") or meta.get("owner", "")
+        if not owner:
+            await backend.destroy(sb["id"])
+            logger.info(f"Destroyed ownerless session {sid} (sandbox {sb['id']})")
+            continue
         sessions[sid] = Session(
             session_id=sid,
             sandbox_id=sb["id"],
@@ -626,7 +631,7 @@ async def recover_sessions() -> None:
             last_activity=time.time(),
             status=Status.RUNNING,
             has_repo=meta.get("has_repo", False),
-            owner=sb.get("owner") or meta.get("owner", ""),
+            owner=owner,
         )
         live_sids.add(sid)
         logger.info(f"Recovered session {sid}")
@@ -1057,7 +1062,7 @@ async def ws_terminal(ws: WebSocket, session_id: str):
         if not user:
             await ws.close(code=4003, reason="Not authorized")
             return
-        if s.owner and user.login != s.owner:
+        if not s.owner or user.login != s.owner:
             await ws.close(code=4003, reason="Not authorized")
             return
 
