@@ -6,12 +6,14 @@ export function TerminalView() {
   const { containerRef, authUrl, dismissAuth, sendText } = useTerminal(wsUrl);
 
   const handlePaste = async () => {
+    let text: string | null = null;
     try {
-      const text = await navigator.clipboard.readText();
-      if (text) sendText(text);
+      text = await navigator.clipboard.readText();
     } catch {
-      // Clipboard API denied
+      // Clipboard API denied — fall back to prompt
+      text = window.prompt('Paste here:');
     }
+    if (text?.trim()) sendText(text.trim());
   };
 
 const handlePasteCode = async () => {
