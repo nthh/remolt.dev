@@ -445,6 +445,7 @@ class K8sBackend(SandboxBackend):
                 "hostname": "sandbox",
                 "automountServiceAccountToken": False,
                 "restartPolicy": "Never",
+                "activeDeadlineSeconds": 14400,
                 "containers": [{
                     "name": "sandbox",
                     "image": SANDBOX_IMAGE,
@@ -828,7 +829,7 @@ async def auth_login(repo: bool = False):
         f"&state={state}"
     )
     resp = RedirectResponse(url)
-    resp.set_cookie("oauth_state", state, httponly=True, samesite="lax", max_age=600)
+    resp.set_cookie("oauth_state", state, httponly=True, secure=True, samesite="lax", max_age=600)
     return resp
 
 
@@ -1032,6 +1033,12 @@ async def api_delete_session(request: Request, session_id: str):
 
 @app.websocket("/ws/terminal/{session_id}")
 async def ws_terminal(ws: WebSocket, session_id: str):
+    # Reject cross-origin WebSocket connections
+    origin = ws.headers.get("origin")
+    if origin and origin not in ALLOWED_ORIGINS:
+        await ws.close(code=4003, reason="Invalid origin")
+        return
+
     s = sessions.get(session_id)
     if not s or s.status != Status.RUNNING:
         await ws.close(code=4004, reason="Session not found")
@@ -1143,7 +1150,7 @@ if _static and _static.is_dir():
 
     @app.get("/{path:path}")
     async def spa_fallback(path: str):
-        file = _static / path
-        if file.is_file():
+        file = (_static / path).resolve()
+        if file.is_file() and str(file).startswith(str(_static.resolve())):
             return FileResponse(file)
         return FileResponse(_static / "index.html")
