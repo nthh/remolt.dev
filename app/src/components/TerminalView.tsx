@@ -6,23 +6,33 @@ export function TerminalView() {
   const { containerRef, authUrl, dismissAuth, sendText } = useTerminal(wsUrl);
 
   const handlePaste = async () => {
+    let text: string | null = null;
     try {
-      const text = await navigator.clipboard.readText();
-      if (text) sendText(text);
+      text = await navigator.clipboard.readText();
     } catch {
-      // Clipboard API denied
+      // Clipboard API denied — fall through to prompt
+    }
+    if (!text) {
+      text = window.prompt('Paste here:');
+    }
+    if (text) {
+      sendText(text);
     }
   };
 
-const handlePasteCode = async () => {
+  const handlePasteCode = async () => {
+    let text: string | null = null;
     try {
-      const text = await navigator.clipboard.readText();
-      if (text.trim()) {
-        sendText(text.trim() + '\n');
-        dismissAuth();
-      }
+      text = await navigator.clipboard.readText();
     } catch {
-      // Clipboard API denied
+      // Clipboard API denied — fall through to prompt
+    }
+    if (!text) {
+      text = window.prompt('Paste code here:');
+    }
+    if (text && text.trim()) {
+      sendText(text.trim() + '\n');
+      dismissAuth();
     }
   };
 
