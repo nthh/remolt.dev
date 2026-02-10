@@ -10,10 +10,15 @@ export function TerminalView() {
     try {
       text = await navigator.clipboard.readText();
     } catch {
-      // Clipboard API denied — fall back to prompt
+      // ignore — will fall through to prompt
+    }
+    if (!text) {
       text = window.prompt('Paste here:');
     }
-    if (text?.trim()) sendText(text.trim());
+    if (text) {
+      // Defer to next tick — iOS can lose focus during clipboard permission dialog
+      setTimeout(() => sendText(text!), 0);
+    }
   };
 
 const handlePasteCode = async () => {
