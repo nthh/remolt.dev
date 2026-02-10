@@ -69,7 +69,7 @@ class FakeBackend:
 
     async def list_managed(self) -> list[dict]:
         return [
-            {"id": sid, "session_id": sb["session_id"], "running": sb["running"]}
+            {"id": sid, "session_id": sb["session_id"], "running": sb["running"], "owner": sb.get("owner", "")}
             for sid, sb in self.sandboxes.items()
         ]
 
@@ -332,6 +332,7 @@ async def test_recover_sessions(fake_backend):
         "session_id": "recovery-test",
         "env": {},
         "running": True,
+        "owner": "testuser",
     }
 
     await srv.recover_sessions()
@@ -353,6 +354,24 @@ async def test_recover_cleans_dead_sandboxes(fake_backend):
 
     await srv.recover_sessions()
     assert "dead-test" not in srv.sessions
+    assert len(fake_backend.sandboxes) == 0
+
+
+@pytest.mark.asyncio
+async def test_recover_destroys_ownerless_sessions(fake_backend):
+    import server.server as srv
+    srv.backend = fake_backend
+    srv.sessions.clear()
+
+    fake_backend.sandboxes["fake-orphan"] = {
+        "session_id": "orphan-test",
+        "env": {},
+        "running": True,
+        "owner": "",
+    }
+
+    await srv.recover_sessions()
+    assert "orphan-test" not in srv.sessions
     assert len(fake_backend.sandboxes) == 0
 
 
