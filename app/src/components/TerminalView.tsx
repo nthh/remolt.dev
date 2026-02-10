@@ -3,7 +3,7 @@ import { useTerminal } from '../hooks/useTerminal';
 
 export function TerminalView() {
   const { session, wsUrl, destroySession } = useSession();
-  const { containerRef, authUrl, dismissAuth, sendText, getSelection } = useTerminal(wsUrl);
+  const { containerRef, authUrl, dismissAuth, sendText } = useTerminal(wsUrl);
 
   const handlePaste = async () => {
     try {
@@ -14,18 +14,7 @@ export function TerminalView() {
     }
   };
 
-  const handleCopy = async () => {
-    const text = getSelection();
-    if (text) {
-      try {
-        await navigator.clipboard.writeText(text);
-      } catch {
-        // Clipboard API denied
-      }
-    }
-  };
-
-  const handlePasteCode = async () => {
+const handlePasteCode = async () => {
     try {
       const text = await navigator.clipboard.readText();
       if (text.trim()) {
@@ -64,9 +53,6 @@ export function TerminalView() {
       <div className="terminal-bottombar">
         <button className="toolbar-btn" onClick={handlePaste} title="Paste from clipboard">
           Paste
-        </button>
-        <button className="toolbar-btn" onClick={handleCopy} title="Copy selection">
-          Copy
         </button>
         <span className="toolbar-sep" />
         <button
