@@ -10,6 +10,8 @@ on:
       - 'Dockerfile'
       - 'k8s/**'
       - '.github/workflows/deploy.yml'
+    paths-ignore:
+      - 'VERSION'
   workflow_dispatch:
 
 env:
@@ -17,7 +19,7 @@ env:
   NAMESPACE: nthh
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -73,6 +75,10 @@ jobs:
         uses: actions/checkout@v4
 
       - if: matrix.changed == 'true' || github.event_name == 'workflow_dispatch'
+        id: version
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - if: matrix.changed == 'true' || github.event_name == 'workflow_dispatch'
         uses: docker/setup-buildx-action@v3
 
       - if: matrix.changed == 'true' || github.event_name == 'workflow_dispatch'
@@ -91,12 +97,13 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-${{ matrix.service }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-${{ matrix.service }}:latest
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-${{ matrix.service }}:v${{ steps.version.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
   deploy:
-    needs: [changes, build]
-    if: ${{ always() && needs.changes.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && github.ref == 'refs/heads/main' }}
+    needs: [test, changes, build]
+    if: ${{ always() && needs.test.result == 'success' && needs.changes.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     environment: production
 
@@ -117,3 +124,29 @@ jobs:
               server=${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-server:${{ github.sha }}
             kubectl -n remolt rollout status deployment/remolt-server --timeout=300s
           fi
+
+  bump-version:
+    needs: [deploy]
+    if: ${{ needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump patch version
+        run: |
+          version=$(cat VERSION)
+          IFS='.' read -r major minor patch <<< "$version"
+          new_version="$major.$minor.$((patch + 1))"
+          echo "$new_version" > VERSION
+          echo "Bumped $version -> $new_version"
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION
+          git commit -m "chore: bump version to $(cat VERSION) [skip ci]"
+          git push
