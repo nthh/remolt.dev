@@ -20,7 +20,7 @@ jobs:
       github.event.action == 'labeled' &&
       github.event.label.name == 'deploy'
     runs-on: ubuntu-latest
-    environment: staging
+    # Uses repo-level KUBECONFIG_BASE64 secret; OAuth secrets are pre-provisioned in cluster
 
     steps:
       # Ensure only one PR uses staging at a time
@@ -65,15 +65,9 @@ jobs:
           echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > /tmp/kubeconfig
           echo "KUBECONFIG=/tmp/kubeconfig" >> "$GITHUB_ENV"
 
-      # Create namespace and auth secret (idempotent, not managed by kustomize)
-      - name: Create namespace and secrets
-        run: |
-          kubectl create namespace remolt-staging --dry-run=client -o yaml | kubectl apply -f -
-          kubectl -n remolt-staging create secret generic remolt-auth \
-            --from-literal=GITHUB_CLIENT_ID=${{ secrets.STAGING_GITHUB_CLIENT_ID }} \
-            --from-literal=GITHUB_CLIENT_SECRET=${{ secrets.STAGING_GITHUB_CLIENT_SECRET }} \
-            --from-literal=COOKIE_SECRET=${{ secrets.STAGING_COOKIE_SECRET }} \
-            --dry-run=client -o yaml | kubectl apply -f -
+      # Ensure namespace exists (secret remolt-auth is pre-provisioned in cluster)
+      - name: Create namespace
+        run: kubectl create namespace remolt-staging --dry-run=client -o yaml | kubectl apply -f -
 
       # Apply staging kustomization (RBAC, server deployment, network policy)
       - name: Apply staging manifests
@@ -137,7 +131,7 @@ jobs:
       (github.event.action == 'unlabeled' && github.event.label.name == 'deploy') ||
       (github.event.action == 'closed' && contains(github.event.pull_request.labels.*.name, 'deploy'))
     runs-on: ubuntu-latest
-    environment: staging
+    # Uses repo-level KUBECONFIG_BASE64 secret; OAuth secrets are pre-provisioned in cluster
 
     steps:
       - uses: actions/checkout@v4
