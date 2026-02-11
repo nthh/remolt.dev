@@ -52,13 +52,7 @@ try:
 except ImportError:
     pass
 
-def _read_version() -> str:
-    for p in [Path(__file__).resolve().parent / "VERSION", Path(__file__).resolve().parent.parent / "VERSION"]:
-        if p.exists():
-            return p.read_text().strip()
-    return "dev"
-
-VERSION = _read_version()
+VERSION = os.getenv("COMMIT_SHA", "dev")
 
 SANDBOX_IMAGE = os.getenv("REMOLT_SANDBOX_IMAGE", "remolt-sandbox")
 STATIC_DIR = os.getenv("REMOLT_STATIC_DIR", "")
@@ -1007,7 +1001,7 @@ class SessionResp(BaseModel):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "sessions": len(sessions)}
+    return {"status": "ok", "sessions": len(sessions), "version": VERSION}
 
 
 @app.post("/api/sessions", response_model=SessionResp)

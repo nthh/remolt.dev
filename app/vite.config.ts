@@ -1,13 +1,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { readFileSync } from 'fs';
-
-const version = readFileSync('../VERSION', 'utf-8').trim();
+const commitSha = (process.env.VITE_COMMIT_SHA || 'dev').slice(0, 7);
 
 export default defineConfig({
   plugins: [react()],
   define: {
-    __APP_VERSION__: JSON.stringify(version),
+    __APP_VERSION__: JSON.stringify(commitSha),
   },
   server: {
     port: 5173,
