@@ -10,8 +10,6 @@ on:
       - 'Dockerfile'
       - 'k8s/**'
       - '.github/workflows/deploy.yml'
-    paths-ignore:
-      - 'VERSION'
   workflow_dispatch:
 
 env:
