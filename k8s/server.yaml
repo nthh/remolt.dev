@@ -33,7 +33,7 @@ spec:
             - name: REMOLT_SANDBOX_IMAGE
               value: ghcr.io/nthh/remolt-sandbox:latest
             - name: REMOLT_MAX_SESSIONS
-              value: "20"
+              value: "100"
             - name: REMOLT_MAX_IDLE_SECONDS
               value: "3600"
             - name: REMOLT_WARM_POOL
