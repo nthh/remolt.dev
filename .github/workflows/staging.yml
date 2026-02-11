@@ -1,7 +1,9 @@
 name: Staging Deploy
 
 on:
-  pull_request:
+  # pull_request_target runs workflow from main branch, not the PR branch.
+  # This prevents a malicious PR from modifying this workflow to exfiltrate secrets.
+  pull_request_target:
     types: [labeled, unlabeled, closed]
 
 env:
