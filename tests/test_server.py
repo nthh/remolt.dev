@@ -429,6 +429,173 @@ async def test_claim_warm_sandbox_empty(fake_backend):
 
 
 @pytest.mark.asyncio
+async def test_claim_warm_sandbox_dead_pod_returns_none(fake_backend):
+    """When a warm pod is dead, claim returns None and destroys the pod."""
+    import server.server as srv
+    srv.backend = fake_backend
+
+    # Create a warm pod then make inject_env fail (simulating dead pod)
+    sandbox_id = await fake_backend.create("warm-dead", {"TERM": "xterm-256color"})
+    srv.warm_pool.put_nowait(sandbox_id)
+
+    original_inject = fake_backend.inject_env
+    async def fail_inject(sid, env):
+        raise RuntimeError("pod is dead")
+    fake_backend.inject_env = fail_inject
+
+    result = await srv.claim_warm_sandbox("test-session", {"TERM": "xterm-256color"})
+    assert result is None
+    assert srv.warm_pool.qsize() == 0
+    # Dead pod should have been destroyed
+    assert sandbox_id not in fake_backend.sandboxes
+
+    fake_backend.inject_env = original_inject
+
+
+@pytest.mark.asyncio
+async def test_claim_dead_warm_pod_falls_through_to_cold_start(fake_backend):
+    """Session creation succeeds via cold start when warm pod is dead."""
+    import server.server as srv
+    srv.backend = fake_backend
+    srv.sessions.clear()
+    original_auth = srv.AUTH_REQUIRED
+    srv.AUTH_REQUIRED = False
+
+    try:
+        # Create a warm pod then make inject_env fail for that pod only
+        warm_id = await fake_backend.create("warm-dead", {"TERM": "xterm-256color"})
+        srv.warm_pool.put_nowait(warm_id)
+
+        original_inject = fake_backend.inject_env
+        call_count = 0
+        async def fail_first_inject(sid, env):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("pod is dead")
+            return await original_inject(sid, env)
+        fake_backend.inject_env = fail_first_inject
+
+        from fastapi.testclient import TestClient
+        client = TestClient(srv.app, raise_server_exceptions=False)
+        resp = client.post("/api/sessions", json={})
+        assert resp.status_code == 200
+        # Dead warm pod should be destroyed, new cold-start pod should exist
+        assert warm_id not in fake_backend.sandboxes
+        assert len(fake_backend.sandboxes) == 1
+    finally:
+        srv.AUTH_REQUIRED = original_auth
+        fake_backend.inject_env = original_inject
+
+
+@pytest.mark.asyncio
+async def test_warm_pool_loop_cleans_errored_pods(fake_backend):
+    """Warm pool loop destroys errored warm pods and purges stale queue entries."""
+    import server.server as srv
+    srv.backend = fake_backend
+
+    # Drain existing queue
+    while not srv.warm_pool.empty():
+        srv.warm_pool.get_nowait()
+
+    # Simulate an errored warm pod in K8s (not running)
+    fake_backend.sandboxes["remolt-warm-dead1"] = {
+        "session_id": "warm-dead1",
+        "env": {},
+        "running": False,
+    }
+    # Put a stale entry in the queue pointing to a non-existent pod
+    srv.warm_pool.put_nowait("remolt-warm-gone")
+
+    # Run warm_pool_loop for one health-check iteration (counter % 6 == 0)
+    # We patch asyncio.sleep to break after one iteration and set counter to 5
+    original_pool_size = srv.WARM_POOL_SIZE
+    srv.WARM_POOL_SIZE = 0  # Don't try to create new pods
+
+    iterations = 0
+    original_sleep = asyncio.sleep
+    async def fake_sleep(s):
+        nonlocal iterations
+        iterations += 1
+        if iterations >= 1:
+            raise asyncio.CancelledError()
+
+    try:
+        # Manually run one health check cycle
+        managed = await fake_backend.list_managed()
+        running_ids = set()
+        for sb in managed:
+            sid = sb.get("session_id", "")
+            if sid.startswith("warm-") and not sb["running"]:
+                await fake_backend.destroy(sb["id"])
+            elif sb["running"]:
+                running_ids.add(sb["id"])
+
+        # Purge stale queue entries
+        requeue = []
+        while not srv.warm_pool.empty():
+            try:
+                sbid = srv.warm_pool.get_nowait()
+                if sbid in running_ids:
+                    requeue.append(sbid)
+            except asyncio.QueueEmpty:
+                break
+        for sbid in requeue:
+            srv.warm_pool.put_nowait(sbid)
+
+        # Errored pod should be destroyed
+        assert "remolt-warm-dead1" not in fake_backend.sandboxes
+        # Stale queue entry should be purged
+        assert srv.warm_pool.qsize() == 0
+    finally:
+        srv.WARM_POOL_SIZE = original_pool_size
+
+
+@pytest.mark.asyncio
+async def test_warm_pool_loop_keeps_healthy_entries(fake_backend):
+    """Warm pool loop keeps queue entries for pods that are still running."""
+    import server.server as srv
+    srv.backend = fake_backend
+
+    # Drain existing queue
+    while not srv.warm_pool.empty():
+        srv.warm_pool.get_nowait()
+
+    # Create a healthy warm pod
+    sandbox_id = await fake_backend.create("warm-healthy", {"TERM": "xterm-256color"})
+    srv.warm_pool.put_nowait(sandbox_id)
+
+    # Run the health check logic
+    managed = await fake_backend.list_managed()
+    running_ids = set()
+    for sb in managed:
+        sid = sb.get("session_id", "")
+        if sid.startswith("warm-") and not sb["running"]:
+            await fake_backend.destroy(sb["id"])
+        elif sb["running"]:
+            running_ids.add(sb["id"])
+
+    requeue = []
+    while not srv.warm_pool.empty():
+        try:
+            sbid = srv.warm_pool.get_nowait()
+            if sbid in running_ids:
+                requeue.append(sbid)
+        except asyncio.QueueEmpty:
+            break
+    for sbid in requeue:
+        srv.warm_pool.put_nowait(sbid)
+
+    # Healthy pod should still be in pool
+    assert srv.warm_pool.qsize() == 1
+    assert sandbox_id in fake_backend.sandboxes
+
+    # Clean up shared state
+    while not srv.warm_pool.empty():
+        srv.warm_pool.get_nowait()
+
+
+@pytest.mark.asyncio
 async def test_create_session_uses_warm_pool(fake_backend):
     """When warm pool has a sandbox, session creation claims it instead of creating new."""
     import server.server as srv

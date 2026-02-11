@@ -686,7 +686,39 @@ async def warm_pool_loop() -> None:
     """Keep WARM_POOL_SIZE idle sandboxes ready for instant session creation."""
     if WARM_POOL_SIZE <= 0:
         return
+    check_counter = 0
     while True:
+        check_counter += 1
+
+        # Every ~30s, validate pool health: destroy errored pods, purge stale queue entries
+        if check_counter % 6 == 0:
+            try:
+                managed = await backend.list_managed()
+                running_ids = set()
+                for sb in managed:
+                    sid = sb.get("session_id", "")
+                    if sid.startswith("warm-") and not sb["running"]:
+                        logger.info(f"Warm pool: destroying errored pod {sb['id']}")
+                        await backend.destroy(sb["id"])
+                    elif sb["running"]:
+                        running_ids.add(sb["id"])
+
+                # Purge queue entries pointing to dead pods
+                requeue = []
+                while not warm_pool.empty():
+                    try:
+                        sbid = warm_pool.get_nowait()
+                        if sbid in running_ids:
+                            requeue.append(sbid)
+                        else:
+                            logger.info(f"Warm pool: dropping stale queue entry {sbid}")
+                    except asyncio.QueueEmpty:
+                        break
+                for sbid in requeue:
+                    warm_pool.put_nowait(sbid)
+            except Exception as e:
+                logger.warning(f"Warm pool health check failed: {e}")
+
         deficit = WARM_POOL_SIZE - warm_pool.qsize()
         for _ in range(deficit):
             try:
@@ -705,12 +737,20 @@ async def claim_warm_sandbox(session_id: str, env: dict[str, str]) -> str | None
     """Try to claim a pre-warmed sandbox. Returns sandbox_id or None."""
     try:
         sandbox_id = warm_pool.get_nowait()
+    except asyncio.QueueEmpty:
+        return None
+    try:
         await backend.inject_env(sandbox_id, env)
         await backend.relabel(sandbox_id, session_id)
         logger.info(f"Claimed warm sandbox {sandbox_id} (pool size: {warm_pool.qsize()})")
         emit("warm_pool.claimed", sandbox_id=sandbox_id, pool_size=warm_pool.qsize())
         return sandbox_id
-    except asyncio.QueueEmpty:
+    except Exception as e:
+        logger.warning(f"Warm sandbox {sandbox_id} unusable, destroying: {e}")
+        try:
+            await backend.destroy(sandbox_id)
+        except Exception:
+            pass
         return None
 
 
