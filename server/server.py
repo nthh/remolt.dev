@@ -39,7 +39,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.requests import Request
-from starlette.responses import RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse, Response
 
 # ---------------------------------------------------------------------------
 # Config
@@ -78,6 +78,89 @@ logging.basicConfig(
 )
 
 # ---------------------------------------------------------------------------
+# Agent plugin system
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AgentPort:
+    port: int
+    label: str
+    health_check: str = "/"
+
+
+@dataclass
+class AgentConfig:
+    id: str
+    name: str
+    description: str
+    install: str = ""
+    setup: str = ""
+    ports: list[AgentPort] = field(default_factory=list)
+    resources: dict = field(default_factory=lambda: {
+        "requests": {"cpu": "250m", "memory": "512Mi"},
+        "limits": {"cpu": "2", "memory": "2Gi"},
+    })
+    env_defaults: dict[str, str] = field(default_factory=dict)
+    env_schema: list[dict] = field(default_factory=list)
+    welcome: str = ""
+    warm_pool: bool = False
+    icon: str = ""
+
+
+def _load_agents() -> dict[str, AgentConfig]:
+    """Discover and load agent configs from agents/*/agent.json."""
+    agents: dict[str, AgentConfig] = {}
+    # Search relative to project root (this file is in server/)
+    search_paths = [
+        Path(__file__).parent.parent / "agents",  # dev: project root
+        Path("/app/agents"),  # production: baked into Docker image
+    ]
+    for agents_dir in search_paths:
+        if not agents_dir.is_dir():
+            continue
+        for agent_json in sorted(agents_dir.glob("*/agent.json")):
+            try:
+                data = _json.loads(agent_json.read_text())
+                ports = [AgentPort(**p) for p in data.get("ports", [])]
+                agents[data["id"]] = AgentConfig(
+                    id=data["id"],
+                    name=data.get("name", data["id"]),
+                    description=data.get("description", ""),
+                    install=data.get("install", ""),
+                    setup=data.get("setup", ""),
+                    ports=ports,
+                    resources=data.get("resources", {}),
+                    env_defaults=data.get("env_defaults", {}),
+                    env_schema=data.get("env_schema", []),
+                    welcome=data.get("welcome", ""),
+                    warm_pool=data.get("warm_pool", False),
+                    icon=data.get("icon", ""),
+                )
+                logger.info(f"Loaded agent: {data['id']} ({agent_json})")
+            except Exception as e:
+                logger.warning(f"Failed to load agent from {agent_json}: {e}")
+        if agents:
+            break  # Use first directory that has agents
+    return agents
+
+
+def _agent_image(agent_id: str) -> str:
+    """Resolve container image for an agent. Convention: ghcr.io/nthh/remolt-{id}:latest."""
+    # Allow override via env var: REMOLT_CLAUDE_CODE_IMAGE, REMOLT_OPENCLAW_IMAGE, etc.
+    env_key = f"REMOLT_{agent_id.upper().replace('-', '_')}_IMAGE"
+    override = os.getenv(env_key)
+    if override:
+        return override
+    # For claude-code, use SANDBOX_IMAGE for backwards compat
+    if agent_id == "claude-code":
+        return SANDBOX_IMAGE
+    return f"ghcr.io/nthh/remolt-{agent_id}:latest"
+
+
+AGENTS: dict[str, AgentConfig] = _load_agents()
+
+# ---------------------------------------------------------------------------
 # Analytics
 # ---------------------------------------------------------------------------
 
@@ -110,6 +193,7 @@ def save_sessions() -> None:
                 "last_activity": s.last_activity,
                 "has_repo": s.has_repo,
                 "owner": s.owner,
+                "agent_type": s.agent_type,
             }
             for s in sessions.values()
             if s.status == Status.RUNNING
@@ -150,6 +234,7 @@ class Session:
     status: Status = Status.CREATING
     has_repo: bool = False
     owner: str = ""
+    agent_type: str = "claude-code"
 
 
 sessions: dict[str, Session] = {}
@@ -184,7 +269,9 @@ class SandboxBackend(abc.ABC):
     """Abstract interface for sandbox lifecycle."""
 
     @abc.abstractmethod
-    async def create(self, session_id: str, env: dict[str, str]) -> str:
+    async def create(self, session_id: str, env: dict[str, str], *,
+                     image: str | None = None, resources: dict | None = None,
+                     ports: list[int] | None = None) -> str:
         """Create and start a sandbox. Returns sandbox_id."""
 
     @abc.abstractmethod
@@ -252,11 +339,13 @@ class DockerBackend(SandboxBackend):
         import aiodocker
         self._docker = aiodocker.Docker()
 
-    async def create(self, session_id: str, env: dict[str, str]) -> str:
+    async def create(self, session_id: str, env: dict[str, str], *,
+                     image: str | None = None, resources: dict | None = None,
+                     ports: list[int] | None = None) -> str:
         net_name = f"remolt-net-{session_id}"
         await self._docker.networks.create({"Name": net_name, "Driver": "bridge"})
         config = {
-            "Image": SANDBOX_IMAGE,
+            "Image": image or SANDBOX_IMAGE,
             "Tty": True,
             "OpenStdin": True,
             "StdinOnce": False,
@@ -429,10 +518,18 @@ class K8sBackend(SandboxBackend):
             timeout=30,
         )
 
-    async def create(self, session_id: str, env: dict[str, str]) -> str:
+    async def create(self, session_id: str, env: dict[str, str], *,
+                     image: str | None = None, resources: dict | None = None,
+                     ports: list[int] | None = None) -> str:
         # K8s names must be lowercase alphanumeric + hyphens, start/end with alphanumeric
         slug = session_id[:16].lower().replace("_", "-").strip("-")
         pod_name = f"remolt-{slug}"
+        container_image = image or SANDBOX_IMAGE
+        container_resources = resources or {
+            "requests": {"cpu": "250m", "memory": "512Mi"},
+            "limits": {"cpu": "2", "memory": "2Gi"},
+        }
+        container_ports = [{"containerPort": p} for p in (ports or [])]
         pod_manifest = {
             "apiVersion": "v1",
             "kind": "Pod",
@@ -464,14 +561,12 @@ class K8sBackend(SandboxBackend):
                 }],
                 "containers": [{
                     "name": "sandbox",
-                    "image": SANDBOX_IMAGE,
+                    "image": container_image,
                     "tty": True,
                     "stdin": True,
                     "env": [{"name": k, "value": v} for k, v in env.items()],
-                    "resources": {
-                        "requests": {"cpu": "250m", "memory": "512Mi"},
-                        "limits": {"cpu": "2", "memory": "2Gi"},
-                    },
+                    "ports": container_ports,
+                    "resources": container_resources,
                     "securityContext": {
                         "allowPrivilegeEscalation": True,
                     },
@@ -648,6 +743,7 @@ async def recover_sessions() -> None:
             status=Status.RUNNING,
             has_repo=meta.get("has_repo", False),
             owner=owner,
+            agent_type=meta.get("agent_type", "claude-code"),
         )
         live_sids.add(sid)
         logger.info(f"Recovered session {sid}")
@@ -727,11 +823,17 @@ async def warm_pool_loop() -> None:
             except Exception as e:
                 logger.warning(f"Warm pool health check failed: {e}")
 
+        # Only warm-pool agents that have warm_pool=true (default: claude-code)
+        warm_agent = AGENTS.get("claude-code")
+        warm_image = _agent_image("claude-code") if warm_agent else SANDBOX_IMAGE
         deficit = WARM_POOL_SIZE - warm_pool.qsize()
         for _ in range(deficit):
             try:
                 pool_id = secrets.token_hex(4)
-                sandbox_id = await backend.create(f"warm-{pool_id}", {"TERM": "xterm-256color"})
+                sandbox_id = await backend.create(
+                    f"warm-{pool_id}", {"TERM": "xterm-256color"},
+                    image=warm_image,
+                )
                 warm_pool.put_nowait(sandbox_id)
                 logger.info(f"Warm pool: created {sandbox_id} (pool size: {warm_pool.qsize()})")
                 emit("warm_pool.created", sandbox_id=sandbox_id, pool_size=warm_pool.qsize())
@@ -991,12 +1093,16 @@ class CreateSessionReq(BaseModel):
     git_user_email: str | None = None
     api_key: str | None = None
     github_token: str | None = None
+    agent_type: str | None = None
+    agent_env: dict[str, str] | None = None
 
 
 class SessionResp(BaseModel):
     session_id: str
     status: str
     ws_url: str
+    agent_type: str = "claude-code"
+    proxy_url: str | None = None
 
 
 @app.get("/health")
@@ -1015,6 +1121,12 @@ async def api_create_session(request: Request, body: CreateSessionReq):
         user_count = sum(1 for s in sessions.values() if s.owner == user.login and s.status == Status.RUNNING)
         if user_count >= MAX_USER_SESSIONS:
             raise HTTPException(429, f"Max {MAX_USER_SESSIONS} sessions per user")
+
+    # Resolve agent type
+    agent_type = body.agent_type or "claude-code"
+    agent = AGENTS.get(agent_type)
+    if not agent:
+        raise HTTPException(400, f"Unknown agent type: {agent_type}")
 
     sid = secrets.token_urlsafe(32)
     env: dict[str, str] = {"TERM": "xterm-256color"}
@@ -1035,14 +1147,41 @@ async def api_create_session(request: Request, body: CreateSessionReq):
     if body.api_key:
         env["ANTHROPIC_API_KEY"] = body.api_key
 
-    SECRET_KEYS = {"GITHUB_TOKEN", "ANTHROPIC_API_KEY"}
+    # Inject agent-specific env defaults
+    for k, v in agent.env_defaults.items():
+        env.setdefault(k, v)
+
+    # Inject agent-specific env vars from request
+    if body.agent_env:
+        # Only allow keys defined in agent's env_schema
+        allowed_keys = {e["key"] for e in agent.env_schema}
+        for k, v in body.agent_env.items():
+            if k in allowed_keys and v:
+                env[k] = v
+
+    # Inject agent setup and welcome as env vars for entrypoint.sh
+    if agent.setup:
+        env["AGENT_SETUP"] = agent.setup
+    if agent.welcome:
+        env["AGENT_WELCOME"] = agent.welcome
+
+    SECRET_KEYS = {"GITHUB_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"}
     safe_env = {k: v for k, v in env.items() if k not in SECRET_KEYS}
 
+    image = _agent_image(agent_type)
+    agent_ports = [p.port for p in agent.ports]
+
     try:
-        sandbox_id = await claim_warm_sandbox(sid, env)
+        # Only use warm pool for warm-pool-eligible agents
+        sandbox_id = None
+        if agent.warm_pool:
+            sandbox_id = await claim_warm_sandbox(sid, env)
         if not sandbox_id:
             # Cold start: create with safe env only, then inject secrets via exec
-            sandbox_id = await backend.create(sid, safe_env)
+            sandbox_id = await backend.create(
+                sid, safe_env, image=image,
+                resources=agent.resources, ports=agent_ports,
+            )
             await backend.inject_env(sandbox_id, env)
     except Exception as e:
         logger.error(f"Failed to create sandbox: {e}")
@@ -1054,15 +1193,22 @@ async def api_create_session(request: Request, body: CreateSessionReq):
         status=Status.RUNNING,
         has_repo=bool(body.repo_url),
         owner=user.login,
+        agent_type=agent_type,
     )
     # Persist owner in pod labels so sessions survive server restarts
     try:
         await backend.relabel(sandbox_id, sid, owner=user.login)
     except Exception:
         pass  # Non-fatal: session works, just won't survive a restart with owner info
-    emit("session.created", session_id=sid, has_repo=bool(body.repo_url), user=user.login)
+    emit("session.created", session_id=sid, has_repo=bool(body.repo_url),
+         user=user.login, agent_type=agent_type)
     save_sessions()
-    return SessionResp(session_id=sid, status="running", ws_url=f"/ws/terminal/{sid}")
+
+    proxy_url = f"/proxy/{sid}/" if agent.ports else None
+    return SessionResp(
+        session_id=sid, status="running", ws_url=f"/ws/terminal/{sid}",
+        agent_type=agent_type, proxy_url=proxy_url,
+    )
 
 
 @app.get("/api/sessions/{session_id}", response_model=SessionResp)
@@ -1073,8 +1219,11 @@ async def api_get_session(request: Request, session_id: str):
         raise HTTPException(404, "Session not found")
     if AUTH_REQUIRED and s.owner and s.owner != user.login:
         raise HTTPException(403, "Not authorized")
+    agent = AGENTS.get(s.agent_type)
+    proxy_url = f"/proxy/{s.session_id}/" if agent and agent.ports else None
     return SessionResp(
-        session_id=s.session_id, status=s.status.value, ws_url=f"/ws/terminal/{s.session_id}"
+        session_id=s.session_id, status=s.status.value, ws_url=f"/ws/terminal/{s.session_id}",
+        agent_type=s.agent_type, proxy_url=proxy_url,
     )
 
 
@@ -1092,6 +1241,95 @@ async def api_delete_session(request: Request, session_id: str):
     emit("session.ended", session_id=session_id, reason="user", duration_s=round(duration))
     save_sessions()
     return {"status": "terminated", "session_id": session_id}
+
+
+# ---------------------------------------------------------------------------
+# Agent list endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/agents")
+async def api_list_agents():
+    return [
+        {
+            "id": a.id,
+            "name": a.name,
+            "description": a.description,
+            "icon": a.icon,
+            "has_dashboard": bool(a.ports),
+            "env_schema": a.env_schema,
+        }
+        for a in AGENTS.values()
+    ]
+
+
+# ---------------------------------------------------------------------------
+# HTTP proxy for agent web UIs
+# ---------------------------------------------------------------------------
+
+
+@app.api_route("/proxy/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def proxy_agent_ui(request: Request, session_id: str, path: str = ""):
+    user = require_auth(request)
+    s = sessions.get(session_id)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    if AUTH_REQUIRED and s.owner and s.owner != user.login:
+        raise HTTPException(403, "Not authorized")
+
+    agent = AGENTS.get(s.agent_type)
+    if not agent or not agent.ports:
+        raise HTTPException(400, "This agent has no web UI")
+
+    port = agent.ports[0].port
+
+    if isinstance(backend, K8sBackend):
+        # Proxy via K8s API pod proxy endpoint
+        proxy_path = f"/api/v1/namespaces/{backend._namespace}/pods/{s.sandbox_id}:{port}/proxy/{path}"
+        body = await request.body()
+        headers = dict(request.headers)
+        headers.pop("host", None)
+        resp = await backend._client.request(
+            method=request.method,
+            url=proxy_path,
+            content=body,
+            headers=headers,
+        )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=dict(resp.headers),
+        )
+    elif isinstance(backend, DockerBackend):
+        # Get container IP and proxy directly
+        container = backend._docker.containers.container(s.sandbox_id)
+        info = await container.show()
+        networks = info.get("NetworkSettings", {}).get("Networks", {})
+        ip = None
+        for net in networks.values():
+            ip = net.get("IPAddress")
+            if ip:
+                break
+        if not ip:
+            raise HTTPException(502, "Cannot resolve container IP")
+        target_url = f"http://{ip}:{port}/{path}"
+        body = await request.body()
+        headers = dict(request.headers)
+        headers.pop("host", None)
+        async with httpx.AsyncClient() as client:
+            resp = await client.request(
+                method=request.method,
+                url=target_url,
+                content=body,
+                headers=headers,
+            )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+            )
+    else:
+        raise HTTPException(501, "Proxy not supported for this backend")
 
 
 # ---------------------------------------------------------------------------

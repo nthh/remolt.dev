@@ -1,0 +1,18 @@
+{
+  "id": "claude-code",
+  "name": "Claude Code",
+  "description": "AI coding assistant by Anthropic",
+  "install": "npm install -g @anthropic-ai/claude-code",
+  "setup": "",
+  "ports": [],
+  "resources": {
+    "requests": { "cpu": "250m", "memory": "512Mi" },
+    "limits": { "cpu": "2", "memory": "2Gi" }
+  },
+  "env_defaults": {},
+  "env_schema": [
+    { "key": "ANTHROPIC_API_KEY", "label": "Anthropic API Key", "secret": true, "required": false }
+  ],
+  "welcome": "Run `claude` to start an AI coding session.\nRun `gh pr create` to push your work.",
+  "warm_pool": true
+}

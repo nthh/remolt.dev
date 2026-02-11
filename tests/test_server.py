@@ -53,12 +53,17 @@ class FakeBackend:
         self.streams: dict[str, FakeExecStream] = {}
         self._closed = False
 
-    async def create(self, session_id: str, env: dict[str, str]) -> str:
+    async def create(self, session_id: str, env: dict[str, str], *,
+                     image: str | None = None, resources: dict | None = None,
+                     ports: list[int] | None = None) -> str:
         sandbox_id = f"fake-{session_id[:8]}"
         self.sandboxes[sandbox_id] = {
             "session_id": session_id,
             "env": env,
             "running": True,
+            "image": image,
+            "resources": resources,
+            "ports": ports,
         }
         return sandbox_id
 
@@ -84,7 +89,7 @@ class FakeBackend:
             sb["env"].update(env)
             sb["env_injected"] = True
 
-    async def relabel(self, sandbox_id: str, session_id: str) -> None:
+    async def relabel(self, sandbox_id: str, session_id: str, owner: str = "") -> None:
         sb = self.sandboxes.get(sandbox_id)
         if sb:
             sb["session_id"] = session_id
@@ -149,6 +154,58 @@ def test_session_defaults():
     assert s.status == Status.CREATING
     assert s.has_repo is False
     assert s.last_activity > 0
+    assert s.agent_type == "claude-code"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: Agent loading
+# ---------------------------------------------------------------------------
+
+
+def test_agents_loaded():
+    """Agent configs are loaded from agents/ directory."""
+    import server.server as srv
+    assert "claude-code" in srv.AGENTS
+    assert "openclaw" in srv.AGENTS
+    assert srv.AGENTS["claude-code"].name == "Claude Code"
+    assert srv.AGENTS["openclaw"].name == "OpenClaw"
+
+
+def test_agent_ports():
+    """OpenClaw agent has port config, Claude Code does not."""
+    import server.server as srv
+    assert len(srv.AGENTS["claude-code"].ports) == 0
+    assert len(srv.AGENTS["openclaw"].ports) == 1
+    assert srv.AGENTS["openclaw"].ports[0].port == 18789
+
+
+def test_agent_warm_pool_flag():
+    """Claude Code has warm_pool=true, OpenClaw has warm_pool=false."""
+    import server.server as srv
+    assert srv.AGENTS["claude-code"].warm_pool is True
+    assert srv.AGENTS["openclaw"].warm_pool is False
+
+
+# ---------------------------------------------------------------------------
+# API tests: Agent list
+# ---------------------------------------------------------------------------
+
+
+def test_list_agents_endpoint(client):
+    """GET /api/agents returns all agents."""
+    resp = client.get("/api/agents")
+    assert resp.status_code == 200
+    agents = resp.json()
+    assert len(agents) >= 2
+    ids = [a["id"] for a in agents]
+    assert "claude-code" in ids
+    assert "openclaw" in ids
+    # Verify schema shape
+    oc = next(a for a in agents if a["id"] == "openclaw")
+    assert oc["has_dashboard"] is True
+    assert oc["name"] == "OpenClaw"
+    cc = next(a for a in agents if a["id"] == "claude-code")
+    assert cc["has_dashboard"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +233,8 @@ def test_create_session(client, fake_backend):
     assert data["status"] == "running"
     assert data["session_id"]
     assert data["ws_url"].startswith("/ws/terminal/")
+    assert data["agent_type"] == "claude-code"
+    assert data["proxy_url"] is None
     # Backend should have a sandbox
     assert len(fake_backend.sandboxes) == 1
 
@@ -191,6 +250,72 @@ def test_create_session_with_repo(client, fake_backend):
     assert sb["env"]["GIT_USER_NAME"] == "Test"
 
 
+def test_create_session_with_agent_type(client, fake_backend):
+    """Session with agent_type stores it on session."""
+    resp = client.post("/api/sessions", json={"agent_type": "openclaw"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["agent_type"] == "openclaw"
+    assert data["proxy_url"] is not None
+    assert "/proxy/" in data["proxy_url"]
+
+
+def test_create_session_unknown_agent(client, fake_backend):
+    """Unknown agent type returns 400."""
+    resp = client.post("/api/sessions", json={"agent_type": "nonexistent"})
+    assert resp.status_code == 400
+    assert "unknown agent" in resp.json()["detail"].lower()
+
+
+def test_create_session_default_agent(client, fake_backend):
+    """Omitting agent_type defaults to claude-code."""
+    resp = client.post("/api/sessions", json={})
+    assert resp.status_code == 200
+    assert resp.json()["agent_type"] == "claude-code"
+
+
+def test_session_response_proxy_url(client, fake_backend):
+    """OpenClaw sessions have proxy_url."""
+    resp = client.post("/api/sessions", json={"agent_type": "openclaw"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["proxy_url"] is not None
+
+
+def test_session_response_no_proxy_for_claude(client, fake_backend):
+    """Claude-code sessions have no proxy_url."""
+    resp = client.post("/api/sessions", json={"agent_type": "claude-code"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["proxy_url"] is None
+
+
+def test_agent_specific_image(client, fake_backend):
+    """OpenClaw sessions use the openclaw image."""
+    import server.server as srv
+    resp = client.post("/api/sessions", json={"agent_type": "openclaw"})
+    assert resp.status_code == 200
+    sb = list(fake_backend.sandboxes.values())[0]
+    assert "openclaw" in sb["image"]
+
+
+def test_agent_specific_resources(client, fake_backend):
+    """OpenClaw sessions get agent-specific resource limits."""
+    resp = client.post("/api/sessions", json={"agent_type": "openclaw"})
+    assert resp.status_code == 200
+    sb = list(fake_backend.sandboxes.values())[0]
+    assert sb["resources"]["limits"]["memory"] == "4Gi"
+
+
+def test_agent_setup_env_injected(client, fake_backend):
+    """AGENT_SETUP env var set from agent config."""
+    resp = client.post("/api/sessions", json={"agent_type": "openclaw"})
+    assert resp.status_code == 200
+    sb = list(fake_backend.sandboxes.values())[0]
+    assert "AGENT_SETUP" in sb["env"]
+    assert "openclaw gateway" in sb["env"]["AGENT_SETUP"]
+
+
 def test_get_session(client):
     # Create first
     resp = client.post("/api/sessions", json={})
@@ -199,6 +324,7 @@ def test_get_session(client):
     resp = client.get(f"/api/sessions/{sid}")
     assert resp.status_code == 200
     assert resp.json()["session_id"] == sid
+    assert resp.json()["agent_type"] == "claude-code"
 
 
 def test_get_session_not_found(client):
@@ -648,6 +774,35 @@ async def test_create_session_falls_back_to_cold_start(fake_backend):
         srv.AUTH_REQUIRED = original_auth
 
 
+@pytest.mark.asyncio
+async def test_warm_pool_skipped_for_openclaw(fake_backend):
+    """Non-warm-pool agents always cold-start, even when pool has sandboxes."""
+    import server.server as srv
+    srv.backend = fake_backend
+    srv.sessions.clear()
+    original_auth = srv.AUTH_REQUIRED
+    srv.AUTH_REQUIRED = False
+
+    try:
+        # Pre-populate warm pool
+        sandbox_id = await fake_backend.create("warm-pool-1", {"TERM": "xterm-256color"})
+        srv.warm_pool.put_nowait(sandbox_id)
+        initial_pool_size = srv.warm_pool.qsize()
+
+        from fastapi.testclient import TestClient
+        client = TestClient(srv.app, raise_server_exceptions=False)
+        resp = client.post("/api/sessions", json={"agent_type": "openclaw"})
+        assert resp.status_code == 200
+        # Warm pool should NOT be consumed for openclaw
+        assert srv.warm_pool.qsize() == initial_pool_size
+        # Should have created a new sandbox (2 total: warm + openclaw)
+        assert len(fake_backend.sandboxes) == 2
+    finally:
+        srv.AUTH_REQUIRED = original_auth
+        while not srv.warm_pool.empty():
+            srv.warm_pool.get_nowait()
+
+
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
@@ -897,6 +1052,56 @@ def test_create_session_oauth_token_preferred_over_manual_pat(auth_client, fake_
     assert resp.status_code == 200
     sb = list(fake_backend.sandboxes.values())[0]
     assert sb["env"]["GITHUB_TOKEN"] == "ghp_oauth"
+
+
+# ---------------------------------------------------------------------------
+# Proxy tests
+# ---------------------------------------------------------------------------
+
+
+def test_proxy_requires_auth(fake_backend):
+    """Proxy route requires auth when AUTH_REQUIRED=True."""
+    import server.server as srv
+    srv.backend = fake_backend
+    srv.sessions.clear()
+    original = srv.AUTH_REQUIRED
+    srv.AUTH_REQUIRED = True
+    try:
+        client = TestClient(srv.app, raise_server_exceptions=False)
+        resp = client.get("/proxy/nonexistent/")
+        assert resp.status_code == 401
+    finally:
+        srv.AUTH_REQUIRED = original
+
+
+def test_proxy_rejects_wrong_user(auth_client, fake_backend):
+    """Proxy returns 403 for non-owner."""
+    import server.server as srv
+    cookie = _make_auth_cookie(login="user1")
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.post("/api/sessions", json={"agent_type": "openclaw"})
+    sid = resp.json()["session_id"]
+
+    # Switch to different user
+    auth_client.cookies.clear()
+    auth_client.cookies.set("remolt_auth", _make_auth_cookie(login="user2"))
+    resp = auth_client.get(f"/proxy/{sid}/")
+    assert resp.status_code == 403
+
+
+def test_proxy_404_nonexistent(client):
+    """Proxy returns 404 for non-existent session."""
+    resp = client.get("/proxy/nonexistent/")
+    assert resp.status_code == 404
+
+
+def test_proxy_400_no_ports(client, fake_backend):
+    """Claude-code sessions reject proxy (no ports)."""
+    resp = client.post("/api/sessions", json={"agent_type": "claude-code"})
+    sid = resp.json()["session_id"]
+    resp = client.get(f"/proxy/{sid}/")
+    assert resp.status_code == 400
+    assert "no web ui" in resp.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------

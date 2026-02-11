@@ -13,6 +13,7 @@ ARG COMMIT_SHA=dev
 WORKDIR /app
 RUN pip install --no-cache-dir fastapi uvicorn[standard] aiodocker httpx websockets cryptography
 COPY server/server.py .
+COPY agents/ /app/agents/
 COPY --from=frontend /build/dist /app/static
 ENV COMMIT_SHA=${COMMIT_SHA}
 

@@ -1,0 +1,20 @@
+ARG BASE_IMAGE=ghcr.io/nthh/remolt-sandbox-base:latest
+FROM ${BASE_IMAGE}
+
+# Switch to root for installation
+USER root
+
+# Disable auto-updater and install checks for npm global installs
+ENV DISABLE_AUTOUPDATER=1
+ENV DISABLE_INSTALLATION_CHECKS=1
+
+# Option A: install.sh script (for multi-line installs)
+# Option B: inline install command from agent.json via AGENT_INSTALL build arg
+COPY install.sh /tmp/install.sh
+ARG AGENT_INSTALL
+RUN if [ -s /tmp/install.sh ]; then bash /tmp/install.sh; else ${AGENT_INSTALL}; fi && rm -f /tmp/install.sh
+
+# Ensure dev user owns npm globals
+RUN chown -R dev:dev /usr/lib/node_modules /usr/bin
+
+USER dev

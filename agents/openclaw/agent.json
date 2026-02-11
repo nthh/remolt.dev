@@ -1,0 +1,19 @@
+{
+  "id": "openclaw",
+  "name": "OpenClaw",
+  "description": "Autonomous AI agent with web dashboard",
+  "install": "npm install -g openclaw",
+  "setup": "openclaw gateway --bind lan --port 18789 --allow-unconfigured &",
+  "ports": [{ "port": 18789, "label": "Dashboard", "health_check": "/" }],
+  "resources": {
+    "requests": { "cpu": "500m", "memory": "1Gi" },
+    "limits": { "cpu": "2", "memory": "4Gi" }
+  },
+  "env_defaults": { "OPENCLAW_GATEWAY_PORT": "18789" },
+  "env_schema": [
+    { "key": "OPENAI_API_KEY", "label": "OpenAI API Key", "secret": true, "required": false },
+    { "key": "ANTHROPIC_API_KEY", "label": "Anthropic API Key", "secret": true, "required": false }
+  ],
+  "welcome": "OpenClaw dashboard is starting on port 18789.\nClick 'Open Dashboard' in the header, or run `openclaw onboard` to configure.",
+  "warm_pool": false
+}

@@ -36,6 +36,12 @@ export function TerminalView() {
     }
   };
 
+  const handleOpenDashboard = () => {
+    if (session?.proxy_url) {
+      window.open(session.proxy_url, '_blank');
+    }
+  };
+
   return (
     <div className="terminal-container">
       <div className="terminal-header">
@@ -44,9 +50,16 @@ export function TerminalView() {
           <span className="session-id">{session?.session_id}</span>
           <span className="version-tag">{__APP_VERSION__}</span>
         </div>
-        <button className="btn btn-danger" onClick={destroySession}>
-          End Session
-        </button>
+        <div className="terminal-actions">
+          {session?.proxy_url && (
+            <button className="btn btn-secondary" onClick={handleOpenDashboard}>
+              Open Dashboard
+            </button>
+          )}
+          <button className="btn btn-danger" onClick={destroySession}>
+            End Session
+          </button>
+        </div>
       </div>
       {authUrl && (
         <div className="auth-banner">

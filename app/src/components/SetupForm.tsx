@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type FormEvent } from 'react';
-import { useSession } from '../contexts/SessionContext';
+import { useSession, type AgentInfo } from '../contexts/SessionContext';
 
 const PREFS_KEY = 'remolt:prefs';
 
@@ -7,13 +7,14 @@ interface Prefs {
   repoUrl: string;
   gitUserName: string;
   gitUserEmail: string;
+  agentType: string;
 }
 
 function loadPrefs(): Prefs {
   try {
     return JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
   } catch {
-    return { repoUrl: '', gitUserName: '', gitUserEmail: '' };
+    return { repoUrl: '', gitUserName: '', gitUserEmail: '', agentType: 'claude-code' };
   }
 }
 
@@ -22,18 +23,38 @@ function savePrefs(p: Partial<Prefs>) {
   localStorage.setItem(PREFS_KEY, JSON.stringify({ ...existing, ...p }));
 }
 
+function AgentCard({ agent, selected, onClick }: { agent: AgentInfo; selected: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className={`agent-card${selected ? ' agent-card-selected' : ''}`}
+      onClick={onClick}
+    >
+      {agent.icon && <img src={agent.icon} alt="" className="agent-card-icon" />}
+      <div className="agent-card-info">
+        <span className="agent-card-name">{agent.name}</span>
+        <span className="agent-card-desc">{agent.description}</span>
+      </div>
+    </button>
+  );
+}
+
 export function SetupForm() {
-  const { createSession, phase, error, authUser, autoLaunch } = useSession();
+  const { createSession, phase, error, authUser, autoLaunch, agents } = useSession();
   const didAutoLaunch = useRef(false);
   const [repoUrl, setRepoUrl] = useState('');
   const [gitUserName, setGitUserName] = useState('');
   const [gitUserEmail, setGitUserEmail] = useState('');
+  const [agentType, setAgentType] = useState('claude-code');
+  const [agentEnv, setAgentEnv] = useState<Record<string, string>>({});
 
   const hasOAuth = authUser && authUser.login !== 'anonymous';
+  const selectedAgent = agents.find(a => a.id === agentType);
 
   useEffect(() => {
     const p = loadPrefs();
     if (p.repoUrl) setRepoUrl(p.repoUrl);
+    if (p.agentType) setAgentType(p.agentType);
     // Pre-fill git identity from OAuth, then override with saved prefs
     if (hasOAuth) {
       if (authUser.name) setGitUserName(authUser.name);
@@ -52,17 +73,20 @@ export function SetupForm() {
         repoUrl: p.repoUrl || undefined,
         gitUserName: p.gitUserName || undefined,
         gitUserEmail: p.gitUserEmail || undefined,
+        agentType: p.agentType || undefined,
       });
     }
   }, [autoLaunch, phase, createSession]);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    savePrefs({ repoUrl, gitUserName, gitUserEmail });
+    savePrefs({ repoUrl, gitUserName, gitUserEmail, agentType });
     createSession({
       repoUrl: repoUrl || undefined,
       gitUserName: gitUserName || undefined,
       gitUserEmail: gitUserEmail || undefined,
+      agentType,
+      agentEnv: Object.keys(agentEnv).length > 0 ? agentEnv : undefined,
     });
   };
 
@@ -76,6 +100,22 @@ export function SetupForm() {
           Sandboxed AI coding in your browser.
           {hasOAuth && <span style={{ marginLeft: '0.5rem', opacity: 0.7 }}>Signed in as <strong>{authUser.login}</strong></span>}
         </p>
+
+        {agents.length > 1 && (
+          <div className="agent-cards">
+            {agents.map(agent => (
+              <AgentCard
+                key={agent.id}
+                agent={agent}
+                selected={agentType === agent.id}
+                onClick={() => {
+                  setAgentType(agent.id);
+                  setAgentEnv({});
+                }}
+              />
+            ))}
+          </div>
+        )}
 
         <div className="form-section">
           <h3>Repository (optional)</h3>
@@ -98,6 +138,24 @@ export function SetupForm() {
             )}
           </div>
         </div>
+
+        {selectedAgent && selectedAgent.env_schema.length > 0 && (
+          <div className="form-section">
+            <h3>API Keys (optional)</h3>
+            {selectedAgent.env_schema.map(field => (
+              <div className="form-group" key={field.key}>
+                <label>{field.label}</label>
+                <input
+                  type={field.secret ? 'password' : 'text'}
+                  value={agentEnv[field.key] || ''}
+                  onChange={(e) => setAgentEnv(prev => ({ ...prev, [field.key]: e.target.value }))}
+                  placeholder={field.label}
+                  autoComplete="off"
+                />
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className="form-section">
           <h3>Git Identity (optional)</h3>

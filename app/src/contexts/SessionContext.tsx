@@ -8,6 +8,8 @@ interface SessionInfo {
   session_id: string;
   status: string;
   ws_url: string;
+  agent_type: string;
+  proxy_url: string | null;
 }
 
 interface AuthUser {
@@ -17,6 +19,15 @@ interface AuthUser {
   auth_required: boolean;
 }
 
+export interface AgentInfo {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  has_dashboard: boolean;
+  env_schema: { key: string; label: string; secret: boolean; required: boolean }[];
+}
+
 interface SessionContextType {
   session: SessionInfo | null;
   phase: Phase;
@@ -24,10 +35,13 @@ interface SessionContextType {
   wsUrl: string | null;
   authUser: AuthUser | null;
   autoLaunch: boolean;
+  agents: AgentInfo[];
   createSession: (params: {
     repoUrl?: string;
     gitUserName?: string;
     gitUserEmail?: string;
+    agentType?: string;
+    agentEnv?: Record<string, string>;
   }) => Promise<void>;
   destroySession: () => Promise<void>;
 }
@@ -40,6 +54,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [autoLaunch, setAutoLaunch] = useState(false);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
 
   const wsUrl = session
     ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${session.ws_url}`
@@ -61,6 +76,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         }
       } catch {
         // Server unreachable — proceed without auth (local dev)
+      }
+
+      // Fetch available agents
+      try {
+        const agentsRes = await fetch('/api/agents');
+        if (agentsRes.ok) {
+          setAgents(await agentsRes.json());
+        }
+      } catch {
+        // Non-fatal
       }
 
       // 2. Auto-launch after OAuth redirect
@@ -118,6 +143,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     repoUrl?: string;
     gitUserName?: string;
     gitUserEmail?: string;
+    agentType?: string;
+    agentEnv?: Record<string, string>;
   }) => {
     setPhase('creating');
     setError(null);
@@ -129,6 +156,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           repo_url: params.repoUrl || null,
           git_user_name: params.gitUserName || null,
           git_user_email: params.gitUserEmail || null,
+          agent_type: params.agentType || null,
+          agent_env: params.agentEnv || null,
         }),
       });
       if (!res.ok) {
@@ -160,7 +189,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   return (
-    <SessionContext.Provider value={{ session, phase, error, wsUrl, authUser, autoLaunch, createSession, destroySession }}>
+    <SessionContext.Provider value={{ session, phase, error, wsUrl, authUser, autoLaunch, agents, createSession, destroySession }}>
       {children}
     </SessionContext.Provider>
   );

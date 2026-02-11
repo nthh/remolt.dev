@@ -6,6 +6,7 @@ on:
     paths:
       - 'server/**'
       - 'container/**'
+      - 'agents/**'
       - 'app/**'
       - 'Dockerfile'
       - 'k8s/**'
@@ -35,7 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       server: ${{ steps.filter.outputs.server }}
-      sandbox: ${{ steps.filter.outputs.sandbox }}
+      base: ${{ steps.filter.outputs.base }}
+      agents: ${{ steps.filter.outputs.agents }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -46,59 +48,142 @@ jobs:
               - 'server/**'
               - 'app/**'
               - 'Dockerfile'
-            sandbox:
-              - 'container/**'
+            base:
+              - 'container/Dockerfile.base'
+              - 'container/entrypoint.sh'
+            agents:
+              - 'agents/**'
+              - 'container/Dockerfile.agent'
+              - 'container/Dockerfile.base'
+              - 'container/entrypoint.sh'
 
-  build:
+  # Build the shared base image
+  build-base:
     needs: [test, changes]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - service: server
-            dockerfile: Dockerfile
-            context: .
-            changed: ${{ needs.changes.outputs.server }}
-          - service: sandbox
-            dockerfile: container/Dockerfile
-            context: container
-            changed: ${{ needs.changes.outputs.sandbox }}
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      needs.changes.outputs.server == 'true' ||
-      needs.changes.outputs.sandbox == 'true'
-
+      needs.changes.outputs.base == 'true'
+    runs-on: ubuntu-latest
     steps:
-      - if: matrix.changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: container
+          file: container/Dockerfile.base
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-sandbox-base:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-sandbox-base:latest
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
 
-      - if: matrix.changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: docker/setup-buildx-action@v3
+  # Discover agents and build their images
+  discover-agents:
+    needs: [test, changes]
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.agents == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: discover
+        run: |
+          MATRIX="["
+          FIRST=true
+          for agent_json in agents/*/agent.json; do
+            AGENT_DIR=$(dirname "$agent_json")
+            AGENT_ID=$(jq -r '.id' "$agent_json")
+            AGENT_INSTALL=$(jq -r '.install // ""' "$agent_json")
+            HAS_INSTALL_SH=false
+            if [ -f "$AGENT_DIR/install.sh" ] && [ -s "$AGENT_DIR/install.sh" ]; then
+              HAS_INSTALL_SH=true
+            fi
+            if [ "$FIRST" = true ]; then FIRST=false; else MATRIX+=","; fi
+            MATRIX+="{\"id\":\"$AGENT_ID\",\"install\":\"$AGENT_INSTALL\",\"dir\":\"$AGENT_DIR\",\"has_install_sh\":$HAS_INSTALL_SH}"
+          done
+          MATRIX+="]"
+          echo "matrix={\"include\":$MATRIX}" >> "$GITHUB_OUTPUT"
 
-      - if: matrix.changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: docker/login-action@v3
+  build-agents:
+    needs: [test, changes, build-base, discover-agents]
+    if: >-
+      always() &&
+      needs.test.result == 'success' &&
+      needs.discover-agents.result == 'success' &&
+      (needs.build-base.result == 'success' || needs.build-base.result == 'skipped')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.discover-agents.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - if: matrix.changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: docker/build-push-action@v6
+      # Prepare install.sh — create empty file if agent doesn't have one
+      - run: |
+          if [ "${{ matrix.has_install_sh }}" = "true" ]; then
+            cp ${{ matrix.dir }}/install.sh container/install.sh
+          else
+            echo "" > container/install.sh
+          fi
+
+      - uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
+          context: container
+          file: container/Dockerfile.agent
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-sandbox-base:latest
+            AGENT_INSTALL=${{ matrix.install }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-${{ matrix.id }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-${{ matrix.id }}:latest
+          cache-from: type=gha,scope=${{ matrix.id }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.id }}
+
+  # Build the server image
+  build-server:
+    needs: [test, changes]
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.server == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
           push: true
           build-args: |
             COMMIT_SHA=${{ github.sha }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-${{ matrix.service }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-${{ matrix.service }}:latest
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-server:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-server:latest
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
 
   deploy:
-    needs: [test, changes, build]
-    if: ${{ always() && needs.test.result == 'success' && needs.changes.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && github.ref == 'refs/heads/main' }}
+    needs: [test, changes, build-base, build-agents, build-server]
+    if: ${{ always() && needs.test.result == 'success' && needs.changes.result == 'success' && (needs.build-server.result == 'success' || needs.build-server.result == 'skipped') && (needs.build-agents.result == 'success' || needs.build-agents.result == 'skipped') && (needs.build-base.result == 'success' || needs.build-base.result == 'skipped') && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     environment: production
 
@@ -119,4 +204,3 @@ jobs:
               server=${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-server:${{ github.sha }}
             kubectl -n remolt rollout status deployment/remolt-server --timeout=300s
           fi
-

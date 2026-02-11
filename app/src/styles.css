@@ -113,6 +113,66 @@ html, body, #root {
   font-size: 11px;
 }
 
+/* Agent selector cards */
+.agent-cards {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.agent-card {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--fg);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.agent-card:hover {
+  border-color: var(--fg-muted);
+  background: var(--bg-hover);
+}
+
+.agent-card-selected {
+  border-color: var(--accent);
+  background: rgba(122, 162, 247, 0.08);
+}
+
+.agent-card-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.agent-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #c0caf5;
+}
+
+.agent-card-desc {
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .form-section {
   margin-top: 24px;
   padding-top: 24px;
@@ -173,6 +233,20 @@ html, body, #root {
   color: var(--fg);
 }
 
+.btn-secondary {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 6px 16px;
+  font-size: 13px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.btn-secondary:hover {
+  background: rgba(122, 162, 247, 0.1);
+}
+
 .btn-danger {
   background: transparent;
   color: var(--red);
@@ -208,6 +282,13 @@ html, body, #root {
   padding: 8px 16px;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.terminal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
 }
 

@@ -57,8 +57,15 @@ If you encounter a bug or have a feature request for remolt:
 See `~/remolt-dev/CLAUDE.md` for full architecture details and conventions.
 CLAUDEMD
 
-# Welcome message (shown once per session)
-cat >> /home/dev/.bashrc << 'BASHRC'
+# Run agent setup command if provided (e.g., start OpenClaw gateway)
+if [ -n "$AGENT_SETUP" ]; then
+    eval "$AGENT_SETUP"
+fi
+
+# Welcome message — use AGENT_WELCOME if set, otherwise default
+WELCOME_MSG="${AGENT_WELCOME:-Run \`claude\` to start an AI coding session.\nRun \`gh pr create\` to push your work.}"
+
+cat >> /home/dev/.bashrc << BASHRC
 
 # Remolt welcome (once per session)
 if [ ! -f /tmp/.remolt-welcomed ]; then
@@ -66,8 +73,7 @@ if [ ! -f /tmp/.remolt-welcomed ]; then
     echo ""
     echo -e "\033[1;36m  remolt.dev\033[0m — sandboxed AI coding"
     echo ""
-    echo -e "  Run \033[1mclaude\033[0m to start an AI coding session."
-    echo -e "  Run \033[1mgh pr create\033[0m to push your work."
+    echo -e "  ${WELCOME_MSG}"
     echo ""
     echo -e "  \033[2mHit a bug or have a feature request?"
     echo -e "  The remolt source is at ~/remolt-dev/"
