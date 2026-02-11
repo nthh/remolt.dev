@@ -67,7 +67,7 @@ CLEANUP_INTERVAL = int(os.getenv("REMOLT_CLEANUP_INTERVAL", "60"))
 MAX_SESSIONS = int(os.getenv("REMOLT_MAX_SESSIONS", "10"))
 MAX_USER_SESSIONS = int(os.getenv("REMOLT_MAX_USER_SESSIONS", "2"))
 WARM_POOL_SIZE = int(os.getenv("REMOLT_WARM_POOL", "0"))
-SANDBOX_BANDWIDTH = os.getenv("REMOLT_SANDBOX_BANDWIDTH", "12M")  # per-pod limit (~100Mbps)
+SANDBOX_BANDWIDTH = os.getenv("REMOLT_SANDBOX_BANDWIDTH", "100mbit")  # per-pod tc rate limit
 NAMESPACE = os.getenv("REMOLT_NAMESPACE", "remolt")
 
 # GitHub OAuth
@@ -449,16 +449,25 @@ class K8sBackend(SandboxBackend):
                     "remolt.managed": "true",
                     "remolt.session-id": session_id,
                 },
-                "annotations": {
-                    "kubernetes.io/ingress-bandwidth": SANDBOX_BANDWIDTH,
-                    "kubernetes.io/egress-bandwidth": SANDBOX_BANDWIDTH,
-                },
+                "annotations": {},  # bandwidth enforced via init container tc rule
             },
             "spec": {
                 "hostname": "sandbox",
                 "automountServiceAccountToken": False,
                 "restartPolicy": "Never",
                 "activeDeadlineSeconds": 14400,
+                "initContainers": [{
+                    "name": "bandwidth-limit",
+                    "image": "alpine",
+                    "command": ["sh", "-c",
+                        f"apk add --no-cache iproute2 && "
+                        f"DEV=$(ip route show default | awk '{{print $5}}' | head -1) && "
+                        f"tc qdisc add dev $DEV root tbf rate {SANDBOX_BANDWIDTH} burst 256kbit latency 50ms"
+                    ],
+                    "securityContext": {
+                        "capabilities": {"add": ["NET_ADMIN"]},
+                    },
+                }],
                 "containers": [{
                     "name": "sandbox",
                     "image": SANDBOX_IMAGE,
@@ -470,7 +479,7 @@ class K8sBackend(SandboxBackend):
                         "limits": {"cpu": "2", "memory": "2Gi"},
                     },
                     "securityContext": {
-                        "allowPrivilegeEscalation": False,
+                        "allowPrivilegeEscalation": True,
                     },
                 }],
             },
