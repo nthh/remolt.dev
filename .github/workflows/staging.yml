@@ -1,0 +1,190 @@
+name: Staging Deploy
+
+on:
+  pull_request:
+    types: [labeled, unlabeled, closed]
+
+env:
+  REGISTRY: ghcr.io
+  NAMESPACE: nthh
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: write
+
+jobs:
+  # ---------- DEPLOY ----------
+  deploy-staging:
+    if: >-
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'deploy'
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      # Ensure only one PR uses staging at a time
+      - name: Check for conflicting staging deploys
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DEPLOY_PRS=$(gh pr list --repo ${{ github.repository }} --label deploy --state open --json number --jq 'length')
+          if [ "$DEPLOY_PRS" -gt 1 ]; then
+            echo "::error::Another PR already has the 'deploy' label. Remove it first."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # Build server image from PR branch
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          build-args: |
+            COMMIT_SHA=${{ github.event.pull_request.head.sha }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-server:staging-${{ github.event.pull_request.number }}
+          cache-from: type=gha,scope=staging-server
+          cache-to: type=gha,mode=max,scope=staging-server
+
+      # Deploy to K8s
+      - uses: azure/setup-kubectl@v4
+
+      - run: |
+          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > /tmp/kubeconfig
+          echo "KUBECONFIG=/tmp/kubeconfig" >> "$GITHUB_ENV"
+
+      # Create namespace and auth secret (idempotent, not managed by kustomize)
+      - name: Create namespace and secrets
+        run: |
+          kubectl create namespace remolt-staging --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n remolt-staging create secret generic remolt-auth \
+            --from-literal=GITHUB_CLIENT_ID=${{ secrets.STAGING_GITHUB_CLIENT_ID }} \
+            --from-literal=GITHUB_CLIENT_SECRET=${{ secrets.STAGING_GITHUB_CLIENT_SECRET }} \
+            --from-literal=COOKIE_SECRET=${{ secrets.STAGING_COOKIE_SECRET }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # Apply staging kustomization (RBAC, server deployment, network policy)
+      - name: Apply staging manifests
+        run: kubectl kustomize --load-restrictor=LoadRestrictionsNone k8s/staging/ | kubectl apply -f -
+
+      # Set the image to the one we just built
+      - name: Deploy server image
+        run: |
+          kubectl -n remolt-staging set image deployment/remolt-server \
+            server=${{ env.REGISTRY }}/${{ env.NAMESPACE }}/remolt-server:staging-${{ github.event.pull_request.number }}
+          kubectl -n remolt-staging rollout status deployment/remolt-server --timeout=300s
+
+      # Add staging ingress rule to cloudflared config (same tunnel, new hostname)
+      - name: Configure tunnel routing
+        run: |
+          kubectl -n remolt get configmap cloudflared-config -o jsonpath='{.data.config\.yaml}' > /tmp/cf-config.yaml
+
+          if ! grep -q 'staging.remolt.dev' /tmp/cf-config.yaml; then
+            python3 -c "
+          import yaml
+          with open('/tmp/cf-config.yaml') as f:
+              cfg = yaml.safe_load(f)
+          staging_rule = {
+              'hostname': 'staging.remolt.dev',
+              'service': 'http://remolt-server.remolt-staging.svc.cluster.local:8080'
+          }
+          # Insert before the catch-all rule (last entry)
+          cfg['ingress'].insert(-1, staging_rule)
+          with open('/tmp/cf-config.yaml', 'w') as f:
+              yaml.dump(cfg, f, default_flow_style=False)
+          "
+            kubectl -n remolt create configmap cloudflared-config \
+              --from-file=config.yaml=/tmp/cf-config.yaml \
+              --dry-run=client -o yaml | kubectl apply -f -
+            kubectl -n remolt rollout restart deployment/cloudflared
+            kubectl -n remolt rollout status deployment/cloudflared --timeout=120s
+          fi
+
+      # Post staging URL on the PR
+      - name: Comment staging URL
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: [
+                '## Staging deployed',
+                '',
+                'https://staging.remolt.dev',
+                '',
+                `Commit: \`${context.payload.pull_request.head.sha.slice(0, 7)}\``,
+                `Image: \`remolt-server:staging-${context.payload.pull_request.number}\``,
+              ].join('\n'),
+            });
+
+  # ---------- TEARDOWN ----------
+  teardown-staging:
+    if: >-
+      (github.event.action == 'unlabeled' && github.event.label.name == 'deploy') ||
+      (github.event.action == 'closed' && contains(github.event.pull_request.labels.*.name, 'deploy'))
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+
+      - run: |
+          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > /tmp/kubeconfig
+          echo "KUBECONFIG=/tmp/kubeconfig" >> "$GITHUB_ENV"
+
+      # Delete sandbox pods first
+      - name: Clean up sandbox pods
+        run: |
+          kubectl -n remolt-staging delete pods -l remolt.managed=true --ignore-not-found=true
+
+      # Delete staging resources (but not namespace or secrets)
+      - name: Delete staging deployment
+        run: |
+          kubectl kustomize --load-restrictor=LoadRestrictionsNone k8s/staging/ | kubectl delete --ignore-not-found=true -f -
+
+      # Remove staging ingress rule from cloudflared config
+      - name: Remove tunnel routing
+        run: |
+          kubectl -n remolt get configmap cloudflared-config -o jsonpath='{.data.config\.yaml}' > /tmp/cf-config.yaml
+
+          if grep -q 'staging.remolt.dev' /tmp/cf-config.yaml; then
+            python3 -c "
+          import yaml
+          with open('/tmp/cf-config.yaml') as f:
+              cfg = yaml.safe_load(f)
+          cfg['ingress'] = [r for r in cfg['ingress'] if r.get('hostname') != 'staging.remolt.dev']
+          with open('/tmp/cf-config.yaml', 'w') as f:
+              yaml.dump(cfg, f, default_flow_style=False)
+          "
+            kubectl -n remolt create configmap cloudflared-config \
+              --from-file=config.yaml=/tmp/cf-config.yaml \
+              --dry-run=client -o yaml | kubectl apply -f -
+            kubectl -n remolt rollout restart deployment/cloudflared
+            kubectl -n remolt rollout status deployment/cloudflared --timeout=120s
+          fi
+
+      - name: Comment teardown
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: '## Staging torn down\n\nThe staging environment has been cleaned up.',
+            });
