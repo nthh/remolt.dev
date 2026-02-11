@@ -29,5 +29,6 @@ __pycache__/
 
 # Secrets
 .env
+.env.staging
 *.pem
 kubeconfig.yaml
