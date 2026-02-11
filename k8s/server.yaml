@@ -38,6 +38,8 @@ spec:
               value: "3600"
             - name: REMOLT_WARM_POOL
               value: "2"
+            - name: REMOLT_SANDBOX_BANDWIDTH
+              value: "10M"
             - name: REMOLT_ALLOWED_ORIGINS
               value: "https://remolt.dev"
           livenessProbe:
