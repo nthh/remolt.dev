@@ -67,7 +67,7 @@ CLEANUP_INTERVAL = int(os.getenv("REMOLT_CLEANUP_INTERVAL", "60"))
 MAX_SESSIONS = int(os.getenv("REMOLT_MAX_SESSIONS", "10"))
 MAX_USER_SESSIONS = int(os.getenv("REMOLT_MAX_USER_SESSIONS", "2"))
 WARM_POOL_SIZE = int(os.getenv("REMOLT_WARM_POOL", "0"))
-SANDBOX_BANDWIDTH = os.getenv("REMOLT_SANDBOX_BANDWIDTH", "50M")  # per-pod bandwidth limit
+SANDBOX_BANDWIDTH = os.getenv("REMOLT_SANDBOX_BANDWIDTH", "100Mbit")  # per-pod bandwidth limit
 NAMESPACE = os.getenv("REMOLT_NAMESPACE", "remolt")
 
 # GitHub OAuth
