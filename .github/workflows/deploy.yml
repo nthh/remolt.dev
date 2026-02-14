@@ -136,7 +136,7 @@ jobs:
           if [ "${{ matrix.has_install_sh }}" = "true" ]; then
             cp ${{ matrix.dir }}/install.sh container/install.sh
           else
-            echo "" > container/install.sh
+            touch container/install.sh
           fi
 
       - uses: docker/build-push-action@v6

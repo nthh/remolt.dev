@@ -59,7 +59,7 @@ CLAUDEMD
 
 # Run agent setup command if provided (e.g., start OpenClaw gateway)
 if [ -n "$AGENT_SETUP" ]; then
-    eval "$AGENT_SETUP"
+    eval "$AGENT_SETUP" || echo "Warning: agent setup command failed"
 fi
 
 # Welcome message — use AGENT_WELCOME if set, otherwise default
