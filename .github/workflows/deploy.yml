@@ -48,6 +48,7 @@ jobs:
               - 'server/**'
               - 'app/**'
               - 'Dockerfile'
+              - 'agents/**'
             base:
               - 'container/Dockerfile.base'
               - 'container/entrypoint.sh'
