@@ -3,7 +3,7 @@
   "name": "OpenClaw",
   "description": "Autonomous AI agent with web dashboard",
   "install": "npm install -g openclaw",
-  "setup": "openclaw gateway --bind lan --port 18789 --allow-unconfigured &",
+  "setup": "mkdir -p /home/dev/.openclaw && echo '{\"gateway\":{\"mode\":\"local\",\"auth\":{\"token\":\"sandbox\"}}}' > /home/dev/.openclaw/openclaw.json && openclaw gateway --bind lan --port 18789 &",
   "ports": [{ "port": 18789, "label": "Dashboard", "health_check": "/" }],
   "resources": {
     "requests": { "cpu": "500m", "memory": "1Gi" },
