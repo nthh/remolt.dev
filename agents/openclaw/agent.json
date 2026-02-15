@@ -3,7 +3,7 @@
   "name": "OpenClaw",
   "description": "Autonomous AI agent with web dashboard",
   "install": "npm install -g openclaw",
-  "setup": "mkdir -p /home/dev/.openclaw && echo '{\"gateway\":{\"mode\":\"local\",\"auth\":{\"token\":\"sandbox\"}}}' > /home/dev/.openclaw/openclaw.json && openclaw gateway --bind lan --port 18789 &",
+  "setup": "mkdir -p /home/dev/.openclaw && echo '{\"gateway\":{\"mode\":\"local\",\"auth\":{\"token\":\"sandbox\"},\"controlUi\":{\"allowedOrigins\":[\"https://remolt.dev\"],\"allowInsecureAuth\":true}}}' > /home/dev/.openclaw/openclaw.json && openclaw gateway --bind lan --port 18789 &",
   "ports": [{ "port": 18789, "label": "Dashboard", "health_check": "/" }],
   "resources": {
     "requests": { "cpu": "500m", "memory": "1Gi" },
@@ -14,6 +14,6 @@
     { "key": "OPENAI_API_KEY", "label": "OpenAI API Key", "secret": true, "required": false },
     { "key": "ANTHROPIC_API_KEY", "label": "Anthropic API Key", "secret": true, "required": false }
   ],
-  "welcome": "OpenClaw dashboard is starting on port 18789.\nClick 'Open Dashboard' in the header, or run `openclaw onboard` to configure.",
+  "welcome": "OpenClaw dashboard is starting on port 18789.\nSwitch to the Dashboard tab in the header to access the web UI.",
   "warm_pool": false
 }
