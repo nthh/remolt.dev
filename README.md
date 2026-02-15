@@ -1,6 +1,6 @@
 # [remolt.dev](https://remolt.dev)
 
-Sandboxed AI coding sessions in your browser. Launch a full Linux terminal with Claude Code, Aider, or any AI coding CLI — authenticate interactively, push commits directly from the session.
+Sandboxed AI coding sessions in your browser. Choose an AI agent — Claude Code, OpenClaw, or others — launch a full Linux terminal with it, authenticate interactively, push commits directly from the session.
 
 **License:** [MIT](LICENSE)
 
@@ -11,18 +11,20 @@ Sandboxed AI coding sessions in your browser. Launch a full Linux terminal with 
 ```
 Browser (React + xterm.js)
     ↕ WebSocket (binary TTY I/O + JSON control frames)
+    ↕ HTTP/WS proxy (agent dashboards like OpenClaw)
 Server (FastAPI, single file, serves SPA + API)
     ↕ Docker API (local) or K8s API (production)
-Sandbox Container/Pod (Ubuntu 24.04 + tmux + Claude Code + git + gh)
+Sandbox Container/Pod (Ubuntu 24.04 + tmux + agent CLI + git + gh)
 ```
 
 1. User signs in with GitHub (OAuth — optional for local dev, required in production)
-2. User clicks "Launch Session" (optionally enters repo URL, git identity)
-3. Server creates a sandbox (Docker container locally, K8s Pod in production)
-4. GitHub token from OAuth is injected as `GITHUB_TOKEN` — private repo access and `git push` work immediately
+2. User selects an agent (Claude Code, OpenClaw, etc.) and optionally enters a repo URL
+3. Server creates a sandbox with the agent's container image
+4. GitHub token + agent-specific env vars injected into sandbox
 5. Browser connects via WebSocket to a tmux session inside the sandbox
-6. User runs `claude` — authenticates via browser OAuth (auth URL detected and shown as clickable banner)
-7. Session auto-destroyed after 1 hour idle (configurable)
+6. For dashboard-based agents (OpenClaw), server proxies HTTP + WebSocket to the agent's port
+7. For terminal agents (Claude Code), user runs `claude` — auth URL auto-detected and shown as banner
+8. Session auto-destroyed after 1 hour idle (configurable)
 
 **Runtime auto-detection:** The server checks for a K8s service account at startup. If found, it creates Pods via the K8s API. Otherwise, it uses the Docker API. Same code, no configuration needed.
 
@@ -125,25 +127,50 @@ Structured JSON lines written to stdout (captured by Docker logs) and optionally
 
 ---
 
-## Supported Tools
+## Agents
 
-The sandbox is a full Ubuntu 24.04 environment. Pre-installed:
+Remolt supports multiple AI coding agents via a plugin system. Each agent is defined by a JSON config at `agents/{id}/agent.json`.
+
+| Agent | Type | Description |
+|-------|------|-------------|
+| **Claude Code** | Terminal | Anthropic's AI coding CLI — runs in tmux |
+| **OpenClaw** | Dashboard | Autonomous AI agent with web UI — proxied at `/proxy/{session_id}/` |
+
+### Adding a New Agent
+
+Create `agents/{id}/agent.json`:
+
+```json
+{
+  "id": "my-agent",
+  "name": "My Agent",
+  "description": "What it does",
+  "install": "npm install -g my-agent",
+  "setup": "my-agent start --port 9000 &",
+  "ports": [{ "port": 9000, "label": "Dashboard" }],
+  "warm_pool": false
+}
+```
+
+The build system auto-discovers agents and creates per-agent container images (`remolt-{id}`).
+
+## Sandbox Environment
+
+Each sandbox is a full Ubuntu 24.04 environment. Pre-installed in the base image:
 
 | Tool | What |
 |------|------|
-| `claude` | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic's AI coding CLI |
 | `git` | Version control |
 | `gh` | [GitHub CLI](https://cli.github.com/) — push, PR, issues |
 | `node` / `npm` | Node.js 22 LTS |
 | `tmux` | Terminal multiplexer (session persistence) |
 | `sudo` | Install anything else |
 
-Since you have `sudo`, install whatever you need:
+The selected agent CLI is installed on top of the base image. Since you have `sudo`, install whatever else you need:
 
 ```bash
-# Python + Aider
+# Python
 sudo apt-get update && sudo apt-get install -y python3 python3-pip
-pip3 install aider-chat
 
 # Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -286,25 +313,31 @@ Users can run arbitrary code — that's the point. Abuse is mitigated by:
 ## Architecture
 
 ```
-experiments/remote-dev/
+remolt-dev/
 ├── README.md
 ├── Dockerfile              # Multi-stage: build frontend + server image
+├── agents/
+│   ├── claude-code/
+│   │   └── agent.json      # Claude Code agent config
+│   └── openclaw/
+│       └── agent.json      # OpenClaw agent config (ports, setup, env)
 ├── container/
-│   ├── Dockerfile          # Sandbox: Ubuntu 24.04 + Node 22 + Claude Code + git + gh + tmux
-│   └── entrypoint.sh       # Git config, repo clone, exec bash
+│   ├── Dockerfile.base     # Shared base: Ubuntu 24.04 + Node 22 + git + gh + tmux
+│   ├── Dockerfile.agent    # Per-agent layer: installs agent CLI
+│   └── entrypoint.sh       # Git config, repo clone, agent setup
 ├── server/
-│   └── server.py           # Everything: sessions, WebSocket bridge, cleanup, static serving
+│   └── server.py           # Everything: sessions, WebSocket bridge, agent proxy, cleanup
 ├── app/
 │   ├── package.json
 │   ├── vite.config.ts      # Dev proxy to server
 │   └── src/
 │       ├── App.tsx
 │       ├── styles.css                  # Tokyo Night theme
-│       ├── contexts/SessionContext.tsx  # REST API, localStorage persistence
+│       ├── contexts/SessionContext.tsx  # REST API, agent list, localStorage
 │       ├── hooks/useTerminal.ts        # xterm.js + WebSocket + auto-reconnect
 │       └── components/
-│           ├── SetupForm.tsx           # Credentials form
-│           └── TerminalView.tsx        # Full-screen terminal
+│           ├── SetupForm.tsx           # Agent selector + credentials form
+│           └── TerminalView.tsx        # Terminal + dashboard button
 └── k8s/
     ├── namespace.yaml
     ├── network-policy.yaml # Deny sandbox-to-sandbox traffic
@@ -321,10 +354,12 @@ experiments/remote-dev/
 | `GET` | `/auth/callback` | OAuth callback (sets auth cookie) |
 | `GET` | `/auth/me` | Current user info (or 401) |
 | `POST` | `/auth/logout` | Clear auth cookie |
-| `POST` | `/api/sessions` | Create session → `{session_id, ws_url}` (requires auth if configured) |
+| `GET` | `/api/agents` | List available agents |
+| `POST` | `/api/sessions` | Create session → `{session_id, ws_url, agent_type, proxy_url}` |
 | `GET` | `/api/sessions/{id}` | Check if session is alive |
 | `DELETE` | `/api/sessions/{id}` | Destroy session + container |
 | `WS` | `/ws/terminal/{id}` | Terminal (binary TTY + JSON resize control) |
+| `GET/WS` | `/proxy/{id}/{path}` | HTTP + WebSocket proxy to agent dashboard |
 | `GET` | `/*` | SPA static files with fallback to `index.html` |
 
 ### WebSocket Protocol

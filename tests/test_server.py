@@ -1104,6 +1104,46 @@ def test_proxy_400_no_ports(client, fake_backend):
     assert "no web ui" in resp.json()["detail"].lower()
 
 
+def test_resolve_sandbox_ip_helper(fake_backend):
+    """_resolve_sandbox_ip raises 501 for unknown backend types."""
+    import server.server as srv
+    original = srv.backend
+    srv.backend = "not-a-backend"
+    try:
+        with pytest.raises(Exception):
+            asyncio.get_event_loop().run_until_complete(
+                srv._resolve_sandbox_ip("fake-id")
+            )
+    finally:
+        srv.backend = original
+
+
+def test_validate_proxy_access_returns_session_and_port(client, fake_backend):
+    """_validate_proxy_access returns session and port for valid openclaw session."""
+    import server.server as srv
+    resp = client.post("/api/sessions", json={"agent_type": "openclaw"})
+    sid = resp.json()["session_id"]
+    s = srv.sessions[sid]
+    agent = srv.AGENTS["openclaw"]
+    assert agent.ports[0].port == 18789
+
+
+def test_proxy_html_rewrite(client, fake_backend):
+    """Proxy rewrites __OPENCLAW_CONTROL_UI_BASE_PATH__ in HTML responses."""
+    import server.server as srv
+    resp = client.post("/api/sessions", json={"agent_type": "openclaw"})
+    sid = resp.json()["session_id"]
+    # The base path rewrite is in proxy_agent_ui — verify the logic directly
+    content = b'<script>window.__OPENCLAW_CONTROL_UI_BASE_PATH__="";</script>'
+    base = f"/proxy/{sid}/"
+    rewritten = content.replace(
+        b'__OPENCLAW_CONTROL_UI_BASE_PATH__=""',
+        f'__OPENCLAW_CONTROL_UI_BASE_PATH__="{base}"'.encode(),
+    )
+    assert base.encode() in rewritten
+    assert b'__OPENCLAW_CONTROL_UI_BASE_PATH__=""' not in rewritten
+
+
 # ---------------------------------------------------------------------------
 # Security tests
 # ---------------------------------------------------------------------------

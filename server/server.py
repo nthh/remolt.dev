@@ -1268,51 +1268,18 @@ async def api_list_agents():
 # ---------------------------------------------------------------------------
 
 
-@app.api_route("/proxy/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
-async def proxy_agent_ui(request: Request, session_id: str, path: str = ""):
-    user = require_auth(request)
-    s = sessions.get(session_id)
-    if not s:
-        raise HTTPException(404, "Session not found")
-    if AUTH_REQUIRED and s.owner and s.owner != user.login:
-        raise HTTPException(403, "Not authorized")
-
-    agent = AGENTS.get(s.agent_type)
-    if not agent or not agent.ports:
-        raise HTTPException(400, "This agent has no web UI")
-
-    port = agent.ports[0].port
-
+async def _resolve_sandbox_ip(sandbox_id: str) -> str:
+    """Resolve the IP address of a sandbox container/pod."""
+    assert backend is not None
     if isinstance(backend, K8sBackend):
-        # Proxy directly to pod IP (K8s API pod proxy is blocked by network policy)
         pod_resp = await backend._client.get(
-            f"/api/v1/namespaces/{backend._namespace}/pods/{s.sandbox_id}"
+            f"/api/v1/namespaces/{backend._namespace}/pods/{sandbox_id}"
         )
         if pod_resp.status_code != 200:
             raise HTTPException(502, "Cannot resolve pod")
         ip = pod_resp.json().get("status", {}).get("podIP")
-        if not ip:
-            raise HTTPException(502, "Cannot resolve pod IP")
-        target_url = f"http://{ip}:{port}/{path}"
-        body = await request.body()
-        headers = dict(request.headers)
-        headers.pop("host", None)
-        async with httpx.AsyncClient() as client:
-            resp = await client.request(
-                method=request.method,
-                url=target_url,
-                content=body,
-                headers=headers,
-                params=dict(request.query_params),
-            )
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                headers=dict(resp.headers),
-            )
     elif isinstance(backend, DockerBackend):
-        # Get container IP and proxy directly
-        container = backend._docker.containers.container(s.sandbox_id)
+        container = backend._docker.containers.container(sandbox_id)
         info = await container.show()
         networks = info.get("NetworkSettings", {}).get("Networks", {})
         ip = None
@@ -1320,26 +1287,109 @@ async def proxy_agent_ui(request: Request, session_id: str, path: str = ""):
             ip = net.get("IPAddress")
             if ip:
                 break
-        if not ip:
-            raise HTTPException(502, "Cannot resolve container IP")
-        target_url = f"http://{ip}:{port}/{path}"
-        body = await request.body()
-        headers = dict(request.headers)
-        headers.pop("host", None)
-        async with httpx.AsyncClient() as client:
-            resp = await client.request(
-                method=request.method,
-                url=target_url,
-                content=body,
-                headers=headers,
-            )
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                headers=dict(resp.headers),
-            )
     else:
         raise HTTPException(501, "Proxy not supported for this backend")
+    if not ip:
+        raise HTTPException(502, "Cannot resolve sandbox IP")
+    return ip
+
+
+def _validate_proxy_access(request, session_id: str) -> tuple[Session, int]:
+    """Validate auth and return (session, port) for proxy routes."""
+    user = require_auth(request)
+    s = sessions.get(session_id)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    if AUTH_REQUIRED and s.owner and s.owner != user.login:
+        raise HTTPException(403, "Not authorized")
+    agent = AGENTS.get(s.agent_type)
+    if not agent or not agent.ports:
+        raise HTTPException(400, "This agent has no web UI")
+    return s, agent.ports[0].port
+
+
+@app.api_route("/proxy/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def proxy_agent_ui(request: Request, session_id: str, path: str = ""):
+    s, port = _validate_proxy_access(request, session_id)
+    ip = await _resolve_sandbox_ip(s.sandbox_id)
+    target_url = f"http://{ip}:{port}/{path}"
+    body = await request.body()
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    async with httpx.AsyncClient() as client:
+        resp = await client.request(
+            method=request.method,
+            url=target_url,
+            content=body,
+            headers=headers,
+            params=dict(request.query_params),
+        )
+        content = resp.content
+        resp_headers = dict(resp.headers)
+        # Rewrite base path in dashboard HTML so WebSocket/asset URLs resolve correctly
+        ct = resp_headers.get("content-type", "")
+        if "text/html" in ct and b"__OPENCLAW_CONTROL_UI_BASE_PATH__" in content:
+            base = f"/proxy/{session_id}/"
+            content = content.replace(
+                b'__OPENCLAW_CONTROL_UI_BASE_PATH__=""',
+                f'__OPENCLAW_CONTROL_UI_BASE_PATH__="{base}"'.encode(),
+            )
+            resp_headers.pop("content-length", None)
+        return Response(
+            content=content,
+            status_code=resp.status_code,
+            headers=resp_headers,
+        )
+
+
+@app.websocket("/proxy/{session_id}/{path:path}")
+async def ws_proxy_agent(ws: WebSocket, session_id: str, path: str = ""):
+    import websockets
+
+    s, port = _validate_proxy_access(ws, session_id)
+    ip = await _resolve_sandbox_ip(s.sandbox_id)
+    qs = str(ws.query_params) if ws.query_params else ""
+    target_url = f"ws://{ip}:{port}/{path}{'?' + qs if qs else ''}"
+
+    await ws.accept()
+
+    try:
+        async with websockets.connect(target_url, proxy=None) as upstream:
+            async def client_to_upstream():
+                try:
+                    while True:
+                        msg = await ws.receive()
+                        if msg["type"] == "websocket.disconnect":
+                            break
+                        if "text" in msg and msg["text"]:
+                            await upstream.send(msg["text"])
+                        elif "bytes" in msg and msg["bytes"]:
+                            await upstream.send(msg["bytes"])
+                except (WebSocketDisconnect, asyncio.CancelledError):
+                    pass
+
+            async def upstream_to_client():
+                try:
+                    async for data in upstream:
+                        if isinstance(data, str):
+                            await ws.send_text(data)
+                        else:
+                            await ws.send_bytes(data)
+                except (WebSocketDisconnect, asyncio.CancelledError):
+                    pass
+
+            await asyncio.gather(
+                asyncio.create_task(client_to_upstream()),
+                asyncio.create_task(upstream_to_client()),
+                return_exceptions=True,
+            )
+    except Exception as e:
+        logger.warning(f"WS proxy error for {session_id}: {e}")
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
