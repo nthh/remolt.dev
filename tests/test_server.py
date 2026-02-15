@@ -313,7 +313,7 @@ def test_agent_setup_env_injected(client, fake_backend):
     assert resp.status_code == 200
     sb = list(fake_backend.sandboxes.values())[0]
     assert "AGENT_SETUP" in sb["env"]
-    assert "openclaw gateway" in sb["env"]["AGENT_SETUP"]
+    assert "openclaw onboard" in sb["env"]["AGENT_SETUP"]
 
 
 def test_get_session(client):
