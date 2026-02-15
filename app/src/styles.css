@@ -44,6 +44,8 @@ html, body, #root {
   width: 100%;
   max-width: 480px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
 }
 
 .setup-card h1 {
@@ -487,4 +489,60 @@ html, body, #root {
   height: 100%;
   border: none;
   background: var(--bg);
+}
+
+/* Mobile-specific layout */
+@media (max-width: 768px) {
+  .setup-card {
+    padding: 24px;
+  }
+
+  .form-header {
+    order: 1;
+  }
+
+  .agent-cards {
+    order: 2;
+  }
+
+  .form-submit-btn {
+    order: 3;
+    margin-top: 20px;
+    margin-bottom: 0;
+  }
+
+  .form-section-repo {
+    order: 4;
+  }
+
+  .form-section-api {
+    order: 5;
+  }
+
+  .form-section-git {
+    order: 6;
+  }
+
+  .form-error {
+    order: 7;
+  }
+
+  .form-footer {
+    order: 8;
+  }
+
+  .agent-cards {
+    flex-direction: column;
+  }
+
+  .agent-card {
+    width: 100%;
+  }
+}
+
+.form-footer {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-top: 1rem;
 }

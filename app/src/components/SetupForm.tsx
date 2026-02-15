@@ -95,11 +95,13 @@ export function SetupForm() {
   return (
     <div className="setup-container">
       <form className="setup-card" onSubmit={handleSubmit}>
-        <h1>remolt.dev</h1>
-        <p className="subtitle">
-          Sandboxed AI coding in your browser.
-          {hasOAuth && <span style={{ marginLeft: '0.5rem', opacity: 0.7 }}>Signed in as <strong>{authUser.login}</strong></span>}
-        </p>
+        <div className="form-header">
+          <h1>remolt.dev</h1>
+          <p className="subtitle">
+            Sandboxed AI coding in your browser.
+            {hasOAuth && <span style={{ marginLeft: '0.5rem', opacity: 0.7 }}>Signed in as <strong>{authUser.login}</strong></span>}
+          </p>
+        </div>
 
         {agents.length > 1 && (
           <div className="agent-cards">
@@ -117,7 +119,7 @@ export function SetupForm() {
           </div>
         )}
 
-        <div className="form-section">
+        <div className="form-section form-section-repo">
           <h3>Repository (optional)</h3>
           <div className="form-group">
             <label>Repository URL</label>
@@ -140,7 +142,7 @@ export function SetupForm() {
         </div>
 
         {selectedAgent && selectedAgent.env_schema.length > 0 && (
-          <div className="form-section">
+          <div className="form-section form-section-api">
             <h3>API Keys (optional)</h3>
             {selectedAgent.env_schema.map(field => (
               <div className="form-group" key={field.key}>
@@ -157,7 +159,7 @@ export function SetupForm() {
           </div>
         )}
 
-        <div className="form-section">
+        <div className="form-section form-section-git">
           <h3>Git Identity (optional)</h3>
           <div className="form-group">
             <label>Name</label>
@@ -179,13 +181,13 @@ export function SetupForm() {
           </div>
         </div>
 
-        {error && <div className="error-msg">{error}</div>}
+        {error && <div className="error-msg form-error">{error}</div>}
 
-        <button type="submit" className="btn btn-primary" disabled={isLoading}>
+        <button type="submit" className="btn btn-primary form-submit-btn" disabled={isLoading}>
           {isLoading ? 'Launching...' : 'Launch Session'}
         </button>
 
-        <div style={{ display: 'flex', justifyContent: 'center', gap: '1.5rem', marginTop: '1rem' }}>
+        <div className="form-footer">
           {hasOAuth && (
             <a href="/auth/logout" style={{ fontSize: '0.85rem', opacity: 0.6 }}>Sign out</a>
           )}
