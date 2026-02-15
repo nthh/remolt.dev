@@ -1370,8 +1370,14 @@ async def ws_proxy_agent(ws: WebSocket, session_id: str, path: str = ""):
 
     await ws.accept()
 
+    # Forward Origin header so upstream (e.g. OpenClaw) can validate it
+    extra_headers = {}
+    origin = ws.headers.get("origin")
+    if origin:
+        extra_headers["Origin"] = origin
+
     try:
-        async with websockets.connect(target_url, proxy=None) as upstream:
+        async with websockets.connect(target_url, proxy=None, additional_headers=extra_headers) as upstream:
             async def client_to_upstream():
                 try:
                     while True:
@@ -1463,8 +1469,13 @@ async def ws_root_proxy(ws: WebSocket):
 
     await ws.accept()
 
+    # Forward Origin header so upstream (e.g. OpenClaw) can validate it
+    extra_headers = {}
+    if origin:
+        extra_headers["Origin"] = origin
+
     try:
-        async with websockets.connect(target_url, proxy=None) as upstream:
+        async with websockets.connect(target_url, proxy=None, additional_headers=extra_headers) as upstream:
             async def client_to_upstream():
                 try:
                     while True:
