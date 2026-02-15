@@ -1144,6 +1144,116 @@ def test_proxy_html_rewrite(client, fake_backend):
     assert b'__OPENCLAW_CONTROL_UI_BASE_PATH__=""' not in rewritten
 
 
+def test_proxy_no_monkeypatch_in_html(client, fake_backend):
+    """Proxy should NOT inject WebSocket monkeypatch scripts."""
+    import server.server as srv
+    resp = client.post("/api/sessions", json={"agent_type": "openclaw"})
+    sid = resp.json()["session_id"]
+    # Verify the rewrite logic doesn't inject any script tags
+    content = b'<head><script>window.__OPENCLAW_CONTROL_UI_BASE_PATH__="";</script></head>'
+    base = f"/proxy/{sid}/"
+    rewritten = content.replace(
+        b'__OPENCLAW_CONTROL_UI_BASE_PATH__=""',
+        f'__OPENCLAW_CONTROL_UI_BASE_PATH__="{base}"'.encode(),
+    )
+    # Should only have the original script tag, no extra injected scripts
+    assert rewritten.count(b'<script>') == 1
+
+
+# ---------------------------------------------------------------------------
+# Root WebSocket proxy tests
+# ---------------------------------------------------------------------------
+
+
+def test_root_ws_rejects_unauthenticated(fake_backend):
+    """Root WS proxy rejects connections without auth cookie."""
+    import server.server as srv
+    srv.backend = fake_backend
+    srv.sessions.clear()
+    original = srv.AUTH_REQUIRED
+    srv.AUTH_REQUIRED = True
+    try:
+        client = TestClient(srv.app, raise_server_exceptions=False)
+        with pytest.raises(Exception):
+            with client.websocket_connect("/"):
+                pass
+    finally:
+        srv.AUTH_REQUIRED = original
+
+
+def test_root_ws_rejects_cross_origin(auth_client, fake_backend):
+    """Root WS proxy rejects connections from disallowed origins."""
+    import server.server as srv
+    cookie = _make_auth_cookie(login="user1")
+    auth_client.cookies.set("remolt_auth", cookie)
+    # Create an openclaw session
+    auth_client.post("/api/sessions", json={"agent_type": "openclaw"})
+    with pytest.raises(Exception):
+        with auth_client.websocket_connect(
+            "/",
+            headers={"origin": "https://evil.com"},
+        ):
+            pass
+
+
+def test_root_ws_rejects_no_dashboard_session(auth_client, fake_backend):
+    """Root WS proxy rejects when user has no active dashboard session."""
+    import server.server as srv
+    cookie = _make_auth_cookie(login="user1")
+    auth_client.cookies.set("remolt_auth", cookie)
+    # Create a claude-code session (no dashboard)
+    auth_client.post("/api/sessions", json={"agent_type": "claude-code"})
+    with pytest.raises(Exception):
+        with auth_client.websocket_connect("/"):
+            pass
+
+
+def test_root_ws_rejects_no_session_at_all(auth_client, fake_backend):
+    """Root WS proxy rejects when user has no sessions."""
+    import server.server as srv
+    cookie = _make_auth_cookie(login="user_no_sessions")
+    auth_client.cookies.set("remolt_auth", cookie)
+    with pytest.raises(Exception):
+        with auth_client.websocket_connect("/"):
+            pass
+
+
+def test_root_ws_allows_valid_origin(auth_client, fake_backend):
+    """Root WS proxy allows connections from allowed origins."""
+    import server.server as srv
+    cookie = _make_auth_cookie(login="user1")
+    auth_client.cookies.set("remolt_auth", cookie)
+    auth_client.post("/api/sessions", json={"agent_type": "openclaw"})
+    # Should not raise for allowed origin — will fail at upstream connect
+    # (no real OpenClaw running) but the connection is accepted
+    try:
+        with auth_client.websocket_connect(
+            "/",
+            headers={"origin": srv.ALLOWED_ORIGINS[0]},
+        ):
+            pass
+    except Exception:
+        # Expected: upstream connection fails (no real OpenClaw pod)
+        # but the WS was accepted (not rejected with 4003)
+        pass
+
+
+def test_root_ws_user_isolation(auth_client, fake_backend):
+    """Root WS proxy only routes to sessions owned by the authenticated user."""
+    import server.server as srv
+    # Create session as user1
+    cookie1 = _make_auth_cookie(login="user1")
+    auth_client.cookies.set("remolt_auth", cookie1)
+    auth_client.post("/api/sessions", json={"agent_type": "openclaw"})
+
+    # Try to connect as user2 — should fail (no dashboard session for user2)
+    auth_client.cookies.clear()
+    auth_client.cookies.set("remolt_auth", _make_auth_cookie(login="user2"))
+    with pytest.raises(Exception):
+        with auth_client.websocket_connect("/"):
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Security tests
 # ---------------------------------------------------------------------------

@@ -1308,6 +1308,17 @@ def _validate_proxy_access(request, session_id: str) -> tuple[Session, int]:
     return s, agent.ports[0].port
 
 
+_LOADING_HTML = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Starting...</title>
+<meta http-equiv="refresh" content="3">
+<style>body{background:#1a1b26;color:#a9b1d6;font-family:system-ui;display:flex;
+align-items:center;justify-content:center;height:100vh;margin:0}
+.wrap{text-align:center}.spinner{width:32px;height:32px;border:3px solid #33467c;
+border-top-color:#7aa2f7;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}</style></head>
+<body><div class="wrap"><div class="spinner"></div>Starting dashboard...</div></body></html>"""
+
+
 @app.api_route("/proxy/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy_agent_ui(request: Request, session_id: str, path: str = ""):
     s, port = _validate_proxy_access(request, session_id)
@@ -1316,39 +1327,45 @@ async def proxy_agent_ui(request: Request, session_id: str, path: str = ""):
     body = await request.body()
     headers = dict(request.headers)
     headers.pop("host", None)
-    async with httpx.AsyncClient() as client:
-        resp = await client.request(
-            method=request.method,
-            url=target_url,
-            content=body,
-            headers=headers,
-            params=dict(request.query_params),
-        )
-        content = resp.content
-        resp_headers = dict(resp.headers)
-        # Rewrite base path in dashboard HTML so WebSocket/asset URLs resolve correctly
-        ct = resp_headers.get("content-type", "")
-        if "text/html" in ct and b"__OPENCLAW_CONTROL_UI_BASE_PATH__" in content:
-            base = f"/proxy/{session_id}/"
-            content = content.replace(
-                b'__OPENCLAW_CONTROL_UI_BASE_PATH__=""',
-                f'__OPENCLAW_CONTROL_UI_BASE_PATH__="{base}"'.encode(),
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.request(
+                method=request.method,
+                url=target_url,
+                content=body,
+                headers=headers,
+                params=dict(request.query_params),
             )
-            resp_headers.pop("content-length", None)
-        return Response(
-            content=content,
-            status_code=resp.status_code,
-            headers=resp_headers,
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        # Gateway not ready yet — return loading page that auto-refreshes
+        return Response(content=_LOADING_HTML, status_code=200,
+                        media_type="text/html")
+    content = resp.content
+    resp_headers = dict(resp.headers)
+    # Rewrite base path in dashboard HTML for relative asset loading
+    ct = resp_headers.get("content-type", "")
+    if "text/html" in ct and b"__OPENCLAW_CONTROL_UI_BASE_PATH__" in content:
+        base = f"/proxy/{session_id}/"
+        content = content.replace(
+            b'__OPENCLAW_CONTROL_UI_BASE_PATH__=""',
+            f'__OPENCLAW_CONTROL_UI_BASE_PATH__="{base}"'.encode(),
         )
+        resp_headers.pop("content-length", None)
+    return Response(
+        content=content,
+        status_code=resp.status_code,
+        headers=resp_headers,
+    )
 
 
 @app.websocket("/proxy/{session_id}/{path:path}")
 async def ws_proxy_agent(ws: WebSocket, session_id: str, path: str = ""):
     import websockets
+    from urllib.parse import urlencode
 
     s, port = _validate_proxy_access(ws, session_id)
     ip = await _resolve_sandbox_ip(s.sandbox_id)
-    qs = str(ws.query_params) if ws.query_params else ""
+    qs = urlencode(dict(ws.query_params)) if ws.query_params else ""
     target_url = f"ws://{ip}:{port}/{path}{'?' + qs if qs else ''}"
 
     await ws.accept()
@@ -1385,6 +1402,99 @@ async def ws_proxy_agent(ws: WebSocket, session_id: str, path: str = ""):
             )
     except Exception as e:
         logger.warning(f"WS proxy error for {session_id}: {e}")
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Root WebSocket proxy — routes dashboard WS by auth cookie
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/")
+async def ws_root_proxy(ws: WebSocket):
+    """Route root WebSocket to user's active dashboard session.
+
+    Dashboard agents (OpenClaw, etc.) connect WebSocket to wss://hostname/.
+    We resolve the user's active dashboard session from their auth cookie
+    and proxy the connection to the pod.
+    """
+    import websockets
+    from urllib.parse import urlencode
+
+    # Reject cross-origin WebSocket connections
+    origin = ws.headers.get("origin")
+    if origin and origin not in ALLOWED_ORIGINS:
+        await ws.close(code=4003, reason="Invalid origin")
+        return
+
+    user = await get_current_user(ws)
+    if not user or not user.login:
+        await ws.close(code=4003, reason="Not authorized")
+        return
+
+    # Find user's active session with a dashboard port
+    s = next(
+        (s for s in sessions.values()
+         if s.owner == user.login
+         and s.status == Status.RUNNING
+         and AGENTS.get(s.agent_type) and AGENTS[s.agent_type].ports),
+        None,
+    )
+    if not s:
+        await ws.close(code=4004, reason="No active dashboard session")
+        return
+
+    agent = AGENTS[s.agent_type]
+    port = agent.ports[0].port
+
+    try:
+        ip = await _resolve_sandbox_ip(s.sandbox_id)
+    except Exception:
+        await ws.close(code=4005, reason="Cannot resolve sandbox")
+        return
+
+    # Build target URL with safe query string encoding
+    qs = urlencode(dict(ws.query_params)) if ws.query_params else ""
+    target_url = f"ws://{ip}:{port}/{'?' + qs if qs else ''}"
+
+    await ws.accept()
+
+    try:
+        async with websockets.connect(target_url, proxy=None) as upstream:
+            async def client_to_upstream():
+                try:
+                    while True:
+                        msg = await ws.receive()
+                        if msg["type"] == "websocket.disconnect":
+                            break
+                        if "text" in msg and msg["text"]:
+                            await upstream.send(msg["text"])
+                        elif "bytes" in msg and msg["bytes"]:
+                            await upstream.send(msg["bytes"])
+                except (WebSocketDisconnect, asyncio.CancelledError):
+                    pass
+
+            async def upstream_to_client():
+                try:
+                    async for data in upstream:
+                        if isinstance(data, str):
+                            await ws.send_text(data)
+                        else:
+                            await ws.send_bytes(data)
+                except (WebSocketDisconnect, asyncio.CancelledError):
+                    pass
+
+            await asyncio.gather(
+                asyncio.create_task(client_to_upstream()),
+                asyncio.create_task(upstream_to_client()),
+                return_exceptions=True,
+            )
+    except Exception as e:
+        logger.warning(f"Root WS proxy error for {s.session_id}: {e}")
     finally:
         try:
             await ws.close()

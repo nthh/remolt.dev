@@ -1,9 +1,14 @@
+import { useState } from 'react';
 import { useSession } from '../contexts/SessionContext';
 import { useTerminal } from '../hooks/useTerminal';
+
+type Tab = 'terminal' | 'dashboard';
 
 export function TerminalView() {
   const { session, wsUrl, destroySession } = useSession();
   const { containerRef, authUrl, dismissAuth, sendText } = useTerminal(wsUrl);
+  const hasDashboard = !!session?.proxy_url;
+  const [activeTab, setActiveTab] = useState<Tab>('terminal');
 
   const handlePaste = async () => {
     let text: string | null = null;
@@ -36,32 +41,38 @@ export function TerminalView() {
     }
   };
 
-  const handleOpenDashboard = () => {
-    if (session?.proxy_url) {
-      window.open(session.proxy_url, '_blank');
-    }
-  };
-
   return (
     <div className="terminal-container">
       <div className="terminal-header">
         <div className="session-info">
           <span className="status-dot" />
-          <span className="session-id">{session?.session_id}</span>
+          {hasDashboard ? (
+            <div className="session-tabs">
+              <button
+                className={`session-tab ${activeTab === 'terminal' ? 'active' : ''}`}
+                onClick={() => setActiveTab('terminal')}
+              >
+                Terminal
+              </button>
+              <button
+                className={`session-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
+                onClick={() => setActiveTab('dashboard')}
+              >
+                Dashboard
+              </button>
+            </div>
+          ) : (
+            <span className="session-id">{session?.session_id}</span>
+          )}
           <span className="version-tag">{__APP_VERSION__}</span>
         </div>
         <div className="terminal-actions">
-          {session?.proxy_url && (
-            <button className="btn btn-secondary" onClick={handleOpenDashboard}>
-              Open Dashboard
-            </button>
-          )}
           <button className="btn btn-danger" onClick={destroySession}>
             End Session
           </button>
         </div>
       </div>
-      {authUrl && (
+      {authUrl && activeTab === 'terminal' && (
         <div className="auth-banner">
           <span className="auth-label">auth required</span>
           <a className="auth-link" href={authUrl} target="_blank" rel="noopener noreferrer">
@@ -73,34 +84,51 @@ export function TerminalView() {
           <button className="auth-dismiss" onClick={dismissAuth}>&times;</button>
         </div>
       )}
-      <div className="terminal-body" ref={containerRef} />
-      <div className="terminal-bottombar">
-        <button className="toolbar-btn" onClick={handlePaste} title="Paste from clipboard">
-          Paste
-        </button>
-        <span className="toolbar-sep" />
-        <button
-          className="toolbar-btn"
-          onClick={() => sendText('\x1b')}
-          title="Send Escape"
+      <div
+        className="terminal-body"
+        ref={containerRef}
+        style={{ display: activeTab === 'terminal' ? '' : 'none' }}
+      />
+      {hasDashboard && (
+        <div
+          className="dashboard-frame"
+          style={{ display: activeTab === 'dashboard' ? '' : 'none' }}
         >
-          Esc
-        </button>
-        <button
-          className="toolbar-btn"
-          onClick={() => sendText('\x02\x1b[5~')}
-          title="Scroll up (tmux scrollback)"
-        >
-          &#x25B2;
-        </button>
-        <button
-          className="toolbar-btn"
-          onClick={() => sendText('\x1b[6~')}
-          title="Scroll down"
-        >
-          &#x25BC;
-        </button>
-      </div>
+          <iframe
+            src={session!.proxy_url!}
+            title="Agent Dashboard"
+          />
+        </div>
+      )}
+      {activeTab === 'terminal' && (
+        <div className="terminal-bottombar">
+          <button className="toolbar-btn" onClick={handlePaste} title="Paste from clipboard">
+            Paste
+          </button>
+          <span className="toolbar-sep" />
+          <button
+            className="toolbar-btn"
+            onClick={() => sendText('\x1b')}
+            title="Send Escape"
+          >
+            Esc
+          </button>
+          <button
+            className="toolbar-btn"
+            onClick={() => sendText('\x02\x1b[5~')}
+            title="Scroll up (tmux scrollback)"
+          >
+            &#x25B2;
+          </button>
+          <button
+            className="toolbar-btn"
+            onClick={() => sendText('\x1b[6~')}
+            title="Scroll down"
+          >
+            &#x25BC;
+          </button>
+        </div>
+      )}
     </div>
   );
 }

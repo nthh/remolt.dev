@@ -446,3 +446,45 @@ html, body, #root {
 .terminal-body .xterm {
   height: 100%;
 }
+
+/* Session tabs */
+.session-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.session-tab {
+  padding: 4px 14px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.session-tab:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.session-tab.active {
+  color: var(--accent);
+  background: rgba(122, 162, 247, 0.1);
+  border-color: var(--accent);
+}
+
+/* Dashboard iframe */
+.dashboard-frame {
+  flex: 1;
+  overflow: hidden;
+}
+
+.dashboard-frame iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: var(--bg);
+}
