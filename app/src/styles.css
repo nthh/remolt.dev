@@ -488,3 +488,15 @@ html, body, #root {
   border: none;
   background: var(--bg);
 }
+
+/* Mobile responsiveness */
+@media (max-width: 640px) {
+  .setup-container {
+    align-items: flex-start;
+    padding: 20px 16px;
+  }
+
+  .setup-card {
+    padding: 24px 20px;
+  }
+}
