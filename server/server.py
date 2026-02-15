@@ -87,7 +87,7 @@ class AgentPort:
     port: int
     label: str
     health_check: str = "/"
-    query: str = ""  # query string to append to proxy URL (e.g. "token=sandbox")
+    auth_token: str = ""  # injected into WS connect frame for gateway auth
 
 
 @dataclass
@@ -1205,10 +1205,7 @@ async def api_create_session(request: Request, body: CreateSessionReq):
          user=user.login, agent_type=agent_type)
     save_sessions()
 
-    proxy_url = None
-    if agent.ports:
-        qs = agent.ports[0].query
-        proxy_url = f"/proxy/{sid}/{'?' + qs if qs else ''}"
+    proxy_url = f"/proxy/{sid}/" if agent.ports else None
     return SessionResp(
         session_id=sid, status="running", ws_url=f"/ws/terminal/{sid}",
         agent_type=agent_type, proxy_url=proxy_url,
@@ -1224,10 +1221,7 @@ async def api_get_session(request: Request, session_id: str):
     if AUTH_REQUIRED and s.owner and s.owner != user.login:
         raise HTTPException(403, "Not authorized")
     agent = AGENTS.get(s.agent_type)
-    proxy_url = None
-    if agent and agent.ports:
-        qs = agent.ports[0].query
-        proxy_url = f"/proxy/{s.session_id}/{'?' + qs if qs else ''}"
+    proxy_url = f"/proxy/{s.session_id}/" if agent and agent.ports else None
     return SessionResp(
         session_id=s.session_id, status=s.status.value, ws_url=f"/ws/terminal/{s.session_id}",
         agent_type=s.agent_type, proxy_url=proxy_url,
@@ -1301,8 +1295,8 @@ async def _resolve_sandbox_ip(sandbox_id: str) -> str:
     return ip
 
 
-def _validate_proxy_access(request, session_id: str) -> tuple[Session, int]:
-    """Validate auth and return (session, port) for proxy routes."""
+def _validate_proxy_access(request, session_id: str) -> tuple[Session, AgentPort]:
+    """Validate auth and return (session, agent_port) for proxy routes."""
     user = require_auth(request)
     s = sessions.get(session_id)
     if not s:
@@ -1312,7 +1306,26 @@ def _validate_proxy_access(request, session_id: str) -> tuple[Session, int]:
     agent = AGENTS.get(s.agent_type)
     if not agent or not agent.ports:
         raise HTTPException(400, "This agent has no web UI")
-    return s, agent.ports[0].port
+    return s, agent.ports[0]
+
+
+def _inject_ws_auth_token(text: str, token: str) -> str:
+    """Inject auth token into a WebSocket connect frame (OpenClaw protocol).
+
+    The first WS message is a JSON connect request. We ensure
+    params.auth.token is set so the gateway accepts the connection.
+    """
+    try:
+        frame = _json.loads(text)
+        if isinstance(frame, dict) and frame.get("method") == "connect":
+            params = frame.setdefault("params", {})
+            auth = params.setdefault("auth", {})
+            if not auth.get("token"):
+                auth["token"] = token
+            return _json.dumps(frame)
+    except (ValueError, TypeError):
+        pass
+    return text
 
 
 _LOADING_HTML = """<!DOCTYPE html>
@@ -1328,9 +1341,9 @@ border-top-color:#7aa2f7;border-radius:50%;animation:spin 1s linear infinite;mar
 
 @app.api_route("/proxy/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy_agent_ui(request: Request, session_id: str, path: str = ""):
-    s, port = _validate_proxy_access(request, session_id)
+    s, agent_port = _validate_proxy_access(request, session_id)
     ip = await _resolve_sandbox_ip(s.sandbox_id)
-    target_url = f"http://{ip}:{port}/{path}"
+    target_url = f"http://{ip}:{agent_port.port}/{path}"
     body = await request.body()
     headers = dict(request.headers)
     headers.pop("host", None)
@@ -1370,10 +1383,11 @@ async def ws_proxy_agent(ws: WebSocket, session_id: str, path: str = ""):
     import websockets
     from urllib.parse import urlencode
 
-    s, port = _validate_proxy_access(ws, session_id)
+    s, agent_port = _validate_proxy_access(ws, session_id)
     ip = await _resolve_sandbox_ip(s.sandbox_id)
     qs = urlencode(dict(ws.query_params)) if ws.query_params else ""
-    target_url = f"ws://{ip}:{port}/{path}{'?' + qs if qs else ''}"
+    target_url = f"ws://{ip}:{agent_port.port}/{path}{'?' + qs if qs else ''}"
+    auth_token = agent_port.auth_token
 
     await ws.accept()
 
@@ -1387,12 +1401,17 @@ async def ws_proxy_agent(ws: WebSocket, session_id: str, path: str = ""):
         async with websockets.connect(target_url, proxy=None, additional_headers=extra_headers) as upstream:
             async def client_to_upstream():
                 try:
+                    first = True
                     while True:
                         msg = await ws.receive()
                         if msg["type"] == "websocket.disconnect":
                             break
                         if "text" in msg and msg["text"]:
-                            await upstream.send(msg["text"])
+                            text = msg["text"]
+                            if first and auth_token:
+                                text = _inject_ws_auth_token(text, auth_token)
+                                first = False
+                            await upstream.send(text)
                         elif "bytes" in msg and msg["bytes"]:
                             await upstream.send(msg["bytes"])
                 except (WebSocketDisconnect, asyncio.CancelledError):
@@ -1462,7 +1481,8 @@ async def ws_root_proxy(ws: WebSocket):
         return
 
     agent = AGENTS[s.agent_type]
-    port = agent.ports[0].port
+    agent_port = agent.ports[0]
+    auth_token = agent_port.auth_token
 
     try:
         ip = await _resolve_sandbox_ip(s.sandbox_id)
@@ -1472,7 +1492,7 @@ async def ws_root_proxy(ws: WebSocket):
 
     # Build target URL with safe query string encoding
     qs = urlencode(dict(ws.query_params)) if ws.query_params else ""
-    target_url = f"ws://{ip}:{port}/{'?' + qs if qs else ''}"
+    target_url = f"ws://{ip}:{agent_port.port}/{'?' + qs if qs else ''}"
 
     await ws.accept()
 
@@ -1485,12 +1505,17 @@ async def ws_root_proxy(ws: WebSocket):
         async with websockets.connect(target_url, proxy=None, additional_headers=extra_headers) as upstream:
             async def client_to_upstream():
                 try:
+                    first = True
                     while True:
                         msg = await ws.receive()
                         if msg["type"] == "websocket.disconnect":
                             break
                         if "text" in msg and msg["text"]:
-                            await upstream.send(msg["text"])
+                            text = msg["text"]
+                            if first and auth_token:
+                                text = _inject_ws_auth_token(text, auth_token)
+                                first = False
+                            await upstream.send(text)
                         elif "bytes" in msg and msg["bytes"]:
                             await upstream.send(msg["bytes"])
                 except (WebSocketDisconnect, asyncio.CancelledError):

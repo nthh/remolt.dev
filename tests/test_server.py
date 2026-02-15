@@ -1326,6 +1326,34 @@ def test_proxy_ws_forwards_origin_to_upstream(auth_client, fake_backend):
 
 
 # ---------------------------------------------------------------------------
+# WS auth token injection
+# ---------------------------------------------------------------------------
+
+
+def test_inject_ws_auth_token_adds_token():
+    """_inject_ws_auth_token injects token into connect frame."""
+    from server.server import _inject_ws_auth_token
+    frame = '{"type":"req","method":"connect","params":{"client":{"id":"test"}}}'
+    result = json.loads(_inject_ws_auth_token(frame, "sandbox"))
+    assert result["params"]["auth"]["token"] == "sandbox"
+
+
+def test_inject_ws_auth_token_preserves_existing():
+    """_inject_ws_auth_token does not overwrite existing token."""
+    from server.server import _inject_ws_auth_token
+    frame = '{"type":"req","method":"connect","params":{"auth":{"token":"existing"}}}'
+    result = json.loads(_inject_ws_auth_token(frame, "sandbox"))
+    assert result["params"]["auth"]["token"] == "existing"
+
+
+def test_inject_ws_auth_token_ignores_non_connect():
+    """_inject_ws_auth_token leaves non-connect frames unchanged."""
+    from server.server import _inject_ws_auth_token
+    frame = '{"type":"req","method":"chat","params":{}}'
+    assert _inject_ws_auth_token(frame, "sandbox") == frame
+
+
+# ---------------------------------------------------------------------------
 # Security tests
 # ---------------------------------------------------------------------------
 
