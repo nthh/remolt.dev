@@ -1284,22 +1284,32 @@ async def proxy_agent_ui(request: Request, session_id: str, path: str = ""):
     port = agent.ports[0].port
 
     if isinstance(backend, K8sBackend):
-        # Proxy via K8s API pod proxy endpoint
-        proxy_path = f"/api/v1/namespaces/{backend._namespace}/pods/{s.sandbox_id}:{port}/proxy/{path}"
+        # Proxy directly to pod IP (K8s API pod proxy is blocked by network policy)
+        pod_resp = await backend._client.get(
+            f"/api/v1/namespaces/{backend._namespace}/pods/{s.sandbox_id}"
+        )
+        if pod_resp.status_code != 200:
+            raise HTTPException(502, "Cannot resolve pod")
+        ip = pod_resp.json().get("status", {}).get("podIP")
+        if not ip:
+            raise HTTPException(502, "Cannot resolve pod IP")
+        target_url = f"http://{ip}:{port}/{path}"
         body = await request.body()
         headers = dict(request.headers)
         headers.pop("host", None)
-        resp = await backend._client.request(
-            method=request.method,
-            url=proxy_path,
-            content=body,
-            headers=headers,
-        )
-        return Response(
-            content=resp.content,
-            status_code=resp.status_code,
-            headers=dict(resp.headers),
-        )
+        async with httpx.AsyncClient() as client:
+            resp = await client.request(
+                method=request.method,
+                url=target_url,
+                content=body,
+                headers=headers,
+                params=dict(request.query_params),
+            )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+            )
     elif isinstance(backend, DockerBackend):
         # Get container IP and proxy directly
         container = backend._docker.containers.container(s.sandbox_id)
