@@ -488,3 +488,14 @@ html, body, #root {
   border: none;
   background: var(--bg);
 }
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+  .agent-cards {
+    flex-direction: column;
+  }
+
+  .agent-card {
+    width: 100%;
+  }
+}
