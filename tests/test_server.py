@@ -1254,6 +1254,77 @@ def test_root_ws_user_isolation(auth_client, fake_backend):
             pass
 
 
+def _make_ws_capture_mock():
+    """Create a mock websockets.connect that captures additional_headers."""
+    captured = {}
+
+    class FakeWS:
+        async def __aenter__(self):
+            raise ConnectionRefusedError("fake upstream")
+        async def __aexit__(self, *a):
+            pass
+
+    def fake_connect(url, *, proxy=None, additional_headers=None):
+        captured.update(additional_headers or {})
+        return FakeWS()
+
+    return fake_connect, captured
+
+
+def test_root_ws_forwards_origin_to_upstream(auth_client, fake_backend):
+    """Root WS proxy forwards the Origin header to the upstream WebSocket."""
+    import server.server as srv
+
+    cookie = _make_auth_cookie(login="user1")
+    auth_client.cookies.set("remolt_auth", cookie)
+    auth_client.post("/api/sessions", json={"agent_type": "openclaw"})
+
+    fake_connect, captured = _make_ws_capture_mock()
+    original = srv.ALLOWED_ORIGINS[:]
+    srv.ALLOWED_ORIGINS.append("https://remolt.dev")
+
+    try:
+        with patch("websockets.connect", side_effect=fake_connect), \
+             patch("server.server._resolve_sandbox_ip", return_value="10.0.0.1"):
+            try:
+                with auth_client.websocket_connect(
+                    "/",
+                    headers={"origin": "https://remolt.dev"},
+                ):
+                    pass
+            except Exception:
+                pass
+    finally:
+        srv.ALLOWED_ORIGINS[:] = original
+
+    assert captured.get("Origin") == "https://remolt.dev"
+
+
+def test_proxy_ws_forwards_origin_to_upstream(auth_client, fake_backend):
+    """Per-session WS proxy forwards the Origin header to the upstream WebSocket."""
+    import server.server as srv
+
+    cookie = _make_auth_cookie(login="user1")
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.post("/api/sessions", json={"agent_type": "openclaw"})
+    sid = resp.json()["session_id"]
+
+    fake_connect, captured = _make_ws_capture_mock()
+
+    with patch("websockets.connect", side_effect=fake_connect), \
+         patch("server.server._resolve_sandbox_ip", return_value="10.0.0.1"):
+        try:
+            with auth_client.websocket_connect(
+                f"/proxy/{sid}/ws",
+                headers={"origin": "https://remolt.dev"},
+            ):
+                pass
+        except Exception:
+            pass
+
+    assert captured.get("Origin") == "https://remolt.dev"
+
+
 # ---------------------------------------------------------------------------
 # Security tests
 # ---------------------------------------------------------------------------
