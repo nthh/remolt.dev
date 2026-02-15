@@ -503,6 +503,7 @@ html, body, #root {
 
   .agent-cards {
     order: 2;
+    flex-direction: column;
   }
 
   .form-submit-btn {
@@ -529,10 +530,6 @@ html, body, #root {
 
   .form-footer {
     order: 8;
-  }
-
-  .agent-cards {
-    flex-direction: column;
   }
 
   .agent-card {
