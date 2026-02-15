@@ -4,7 +4,7 @@
   "description": "Autonomous AI agent with web dashboard",
   "install": "npm install -g openclaw",
   "setup": "mkdir -p /home/dev/.openclaw && echo '{\"gateway\":{\"mode\":\"local\",\"auth\":{\"token\":\"sandbox\"},\"controlUi\":{\"allowedOrigins\":[\"https://remolt.dev\"],\"allowInsecureAuth\":true}}}' > /home/dev/.openclaw/openclaw.json && openclaw gateway --bind lan --port 18789 &",
-  "ports": [{ "port": 18789, "label": "Dashboard", "health_check": "/" }],
+  "ports": [{ "port": 18789, "label": "Dashboard", "health_check": "/", "query": "token=sandbox" }],
   "resources": {
     "requests": { "cpu": "500m", "memory": "1Gi" },
     "limits": { "cpu": "2", "memory": "4Gi" }

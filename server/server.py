@@ -87,6 +87,7 @@ class AgentPort:
     port: int
     label: str
     health_check: str = "/"
+    query: str = ""  # query string to append to proxy URL (e.g. "token=sandbox")
 
 
 @dataclass
@@ -1204,7 +1205,10 @@ async def api_create_session(request: Request, body: CreateSessionReq):
          user=user.login, agent_type=agent_type)
     save_sessions()
 
-    proxy_url = f"/proxy/{sid}/" if agent.ports else None
+    proxy_url = None
+    if agent.ports:
+        qs = agent.ports[0].query
+        proxy_url = f"/proxy/{sid}/{'?' + qs if qs else ''}"
     return SessionResp(
         session_id=sid, status="running", ws_url=f"/ws/terminal/{sid}",
         agent_type=agent_type, proxy_url=proxy_url,
@@ -1220,7 +1224,10 @@ async def api_get_session(request: Request, session_id: str):
     if AUTH_REQUIRED and s.owner and s.owner != user.login:
         raise HTTPException(403, "Not authorized")
     agent = AGENTS.get(s.agent_type)
-    proxy_url = f"/proxy/{s.session_id}/" if agent and agent.ports else None
+    proxy_url = None
+    if agent and agent.ports:
+        qs = agent.ports[0].query
+        proxy_url = f"/proxy/{s.session_id}/{'?' + qs if qs else ''}"
     return SessionResp(
         session_id=s.session_id, status=s.status.value, ws_url=f"/ws/terminal/{s.session_id}",
         agent_type=s.agent_type, proxy_url=proxy_url,
