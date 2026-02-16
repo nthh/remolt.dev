@@ -3,7 +3,7 @@
   "name": "OpenClaw",
   "description": "Autonomous AI agent with web dashboard",
   "install": "npm install -g openclaw",
-  "setup": "mkdir -p /home/dev/.openclaw/logs && echo '{\"gateway\":{\"mode\":\"local\",\"auth\":{\"token\":\"sandbox\"},\"controlUi\":{\"allowedOrigins\":[\"https://remolt.dev\"],\"allowInsecureAuth\":true}}}' > /home/dev/.openclaw/openclaw.json && echo 'if [ -t 0 ] && [ ! -f /tmp/.openclaw-onboarded ]; then touch /tmp/.openclaw-onboarded; openclaw onboard; fi' >> /home/dev/.bashrc && echo 'if ! pgrep -f \"openclaw gateway\" >/dev/null 2>&1; then openclaw gateway --verbose --bind lan --port 18789 > /home/dev/.openclaw/logs/gateway.log 2>&1 & fi' >> /home/dev/.bashrc",
+  "setup": "mkdir -p /home/dev/.openclaw/logs && echo '{\"gateway\":{\"mode\":\"local\",\"auth\":{\"mode\":\"token\",\"token\":\"sandbox\"},\"controlUi\":{\"allowedOrigins\":[\"https://remolt.dev\"],\"allowInsecureAuth\":true,\"dangerouslyDisableDeviceAuth\":true}}}' > /home/dev/.openclaw/openclaw.json && echo 'if [ -t 0 ] && [ ! -f /tmp/.openclaw-onboarded ]; then [ -f /dev/shm/.env ] && source /dev/shm/.env; touch /tmp/.openclaw-onboarded; openclaw onboard; fi' >> /home/dev/.bashrc && echo 'if ! pgrep -f \"openclaw gateway\" >/dev/null 2>&1; then openclaw gateway --verbose --bind lan --port 18789 > /home/dev/.openclaw/logs/gateway.log 2>&1 & fi' >> /home/dev/.bashrc",
   "ports": [{ "port": 18789, "label": "Dashboard", "health_check": "/", "auth_token": "sandbox" }],
   "resources": {
     "requests": { "cpu": "500m", "memory": "1Gi" },
