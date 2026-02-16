@@ -57,6 +57,9 @@ If you encounter a bug or have a feature request for remolt:
 See `~/remolt-dev/CLAUDE.md` for full architecture details and conventions.
 CLAUDEMD
 
+# Ensure workspace directory exists (code-server errors if it doesn't)
+mkdir -p /home/dev/workspace
+
 # Start code-server (VS Code in browser) on port 18080
 code-server --bind-addr 0.0.0.0:18080 --auth none --disable-telemetry /home/dev/workspace &
 

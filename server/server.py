@@ -1802,7 +1802,9 @@ async def ws_logs(ws: WebSocket, session_id: str):
     log_cmd = (
         "bash -c '"
         'LOG=/home/dev/.openclaw/logs/gateway.log; '
-        'while [ ! -f "$LOG" ]; do echo "Waiting for logs..."; sleep 2; done; '
+        'TRIES=0; while [ ! -f "$LOG" ]; do TRIES=$((TRIES+1)); '
+        'if [ $TRIES -ge 120 ]; then echo "ERROR: Log file never appeared after 4 minutes. Agent setup may have failed."; exit 1; fi; '
+        'echo "Waiting for logs..."; sleep 2; done; '
         'tail -n 200 -f "$LOG"'
         "'"
     )
