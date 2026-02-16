@@ -11,14 +11,16 @@ const URL_REGEX = /https?:\/\/[^\s\x1b\x00-\x1f]{20,}/g;
 
 interface UseTerminalOptions {
   readOnly?: boolean;
+  copyOnSelect?: boolean;
 }
 
 export function useTerminal(wsUrl: string | null, options: UseTerminalOptions = {}) {
-  const { readOnly = false } = options;
+  const { readOnly = false, copyOnSelect = true } = options;
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [authUrl, setAuthUrl] = useState<string | null>(null);
+  const copyOnSelectRef = useRef(copyOnSelect);
 
   // Buffer for detecting URLs that arrive across multiple WS frames
   const bufferRef = useRef('');
@@ -52,6 +54,11 @@ export function useTerminal(wsUrl: string | null, options: UseTerminalOptions = 
   }, []);
 
   const dismissAuth = useCallback(() => setAuthUrl(null), []);
+
+  // Keep ref in sync without re-running the terminal effect
+  useEffect(() => {
+    copyOnSelectRef.current = copyOnSelect;
+  }, [copyOnSelect]);
 
   useEffect(() => {
     if (!containerRef.current || !wsUrl) return;
@@ -103,6 +110,15 @@ export function useTerminal(wsUrl: string | null, options: UseTerminalOptions = 
 
     term.open(containerRef.current);
     termRef.current = term;
+
+    // Auto-copy on text selection
+    const selectionDisposable = term.onSelectionChange(() => {
+      if (!copyOnSelectRef.current) return;
+      const sel = term.getSelection();
+      if (sel) {
+        navigator.clipboard.writeText(sel).catch(() => {});
+      }
+    });
 
     // Debounced resize — prevents flooding tmux/Ink with rapid resize events
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -217,6 +233,7 @@ export function useTerminal(wsUrl: string | null, options: UseTerminalOptions = 
       el.removeEventListener('click', handleClick);
       ro.disconnect();
       vv?.removeEventListener('resize', handleViewport);
+      selectionDisposable.dispose();
       if (ws) ws.close();
       wsRef.current = null;
       termRef.current = null;

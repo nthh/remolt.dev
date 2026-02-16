@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { useTerminal } from '../hooks/useTerminal';
 
 interface TerminalPanelProps {
@@ -6,7 +7,21 @@ interface TerminalPanelProps {
 }
 
 export function TerminalPanel({ wsUrl, visible }: TerminalPanelProps) {
-  const { containerRef, authUrl, dismissAuth, sendText } = useTerminal(wsUrl);
+  const [copyOnSelect, setCopyOnSelect] = useState(() => {
+    const stored = localStorage.getItem('remolt:copyOnSelect');
+    return stored === null ? true : stored === 'true';
+  });
+
+  useEffect(() => {
+    const handler = () => {
+      const stored = localStorage.getItem('remolt:copyOnSelect');
+      setCopyOnSelect(stored === null ? true : stored === 'true');
+    };
+    window.addEventListener('remolt:settingsChanged', handler);
+    return () => window.removeEventListener('remolt:settingsChanged', handler);
+  }, []);
+
+  const { containerRef, authUrl, dismissAuth, sendText } = useTerminal(wsUrl, { copyOnSelect });
 
   const handlePaste = async () => {
     let text: string | null = null;
@@ -55,24 +70,24 @@ export function TerminalPanel({ wsUrl, visible }: TerminalPanelProps) {
       )}
       <div className="terminal-body" ref={containerRef} />
       <div className="terminal-bottombar">
-        <button className="toolbar-btn" onClick={handlePaste} title="Paste from clipboard">
+        <button className="toolbar-btn" onClick={handlePaste} data-tooltip="Paste from clipboard">
           Paste
         </button>
         <span className="toolbar-sep" />
-        <button className="toolbar-btn" onClick={() => sendText('\x1b')} title="Send Escape">
+        <button className="toolbar-btn" onClick={() => sendText('\x1b')} data-tooltip="Send Escape key">
           Esc
         </button>
         <button
           className="toolbar-btn"
           onClick={() => sendText('\x02\x1b[5~')}
-          title="Scroll up (tmux scrollback)"
+          data-tooltip="Scroll up (tmux)"
         >
           &#x25B2;
         </button>
         <button
           className="toolbar-btn"
           onClick={() => sendText('\x1b[6~')}
-          title="Scroll down"
+          data-tooltip="Scroll down"
         >
           &#x25BC;
         </button>
@@ -80,23 +95,30 @@ export function TerminalPanel({ wsUrl, visible }: TerminalPanelProps) {
         <button
           className="toolbar-btn"
           onClick={() => sendText('\x02%')}
-          title="Split vertical"
+          data-tooltip="Split vertical"
         >
           &#x2502;
         </button>
         <button
           className="toolbar-btn"
           onClick={() => sendText('\x02"')}
-          title="Split horizontal"
+          data-tooltip="Split horizontal"
         >
           &#x2500;
         </button>
         <button
           className="toolbar-btn"
           onClick={() => sendText('\x02o')}
-          title="Switch pane"
+          data-tooltip="Switch pane"
         >
           &#x21E5;
+        </button>
+        <button
+          className="toolbar-btn toolbar-btn-danger"
+          onClick={() => sendText('\x02x')}
+          data-tooltip="Close pane"
+        >
+          &#x2715;
         </button>
       </div>
     </div>

@@ -13,6 +13,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [inputValue, setInputValue] = useState('');
   const [saving, setSaving] = useState(false);
+  const [copyOnSelect, setCopyOnSelect] = useState(() => {
+    const stored = localStorage.getItem('remolt:copyOnSelect');
+    return stored === null ? true : stored === 'true';
+  });
 
   const handleSave = async (keyName: string) => {
     if (!inputValue.trim()) return;
@@ -108,6 +112,24 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               </div>
             );
           })}
+
+          <div className="settings-divider" />
+
+          <h3 className="settings-section-title">Terminal</h3>
+          <div className="toggle-row">
+            <span className="toggle-row-label">Copy on select</span>
+            <button
+              className="toggle-switch"
+              role="switch"
+              aria-checked={copyOnSelect}
+              onClick={() => {
+                const next = !copyOnSelect;
+                setCopyOnSelect(next);
+                localStorage.setItem('remolt:copyOnSelect', String(next));
+                window.dispatchEvent(new CustomEvent('remolt:settingsChanged'));
+              }}
+            />
+          </div>
         </div>
       </div>
     </div>

@@ -437,6 +437,44 @@ html, body, #root {
   transform: scale(0.95);
 }
 
+/* CSS-only tooltips */
+.toolbar-btn[data-tooltip] {
+  position: relative;
+}
+
+.toolbar-btn[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 10px;
+  background: var(--bg-surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.toolbar-btn[data-tooltip]:hover::after {
+  opacity: 1;
+}
+
+/* Danger variant for toolbar buttons */
+.toolbar-btn-danger:hover {
+  color: var(--red);
+  border-color: var(--red);
+  background: rgba(247, 118, 142, 0.08);
+}
+
 .toolbar-sep {
   width: 1px;
   height: 20px;
@@ -894,6 +932,61 @@ html, body, #root {
 
 .workspace-panel-hidden {
   display: none;
+}
+
+/* Settings divider */
+.settings-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 20px 0;
+}
+
+/* Toggle switch (iOS-style) */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.toggle-row-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.toggle-switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  background: var(--border);
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  transition: background 0.2s;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.toggle-switch[aria-checked="true"] {
+  background: var(--accent);
+}
+
+.toggle-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.toggle-switch[aria-checked="true"]::after {
+  transform: translateX(20px);
 }
 
 /* Mobile: scrollable tab bar */
