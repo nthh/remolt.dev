@@ -78,9 +78,10 @@ class FakeBackend:
             for sid, sb in self.sandboxes.items()
         ]
 
-    async def exec_attach(self, sandbox_id: str) -> FakeExecStream:
+    async def exec_attach(self, sandbox_id: str, *, window: int = 0, cmd: str | None = None) -> FakeExecStream:
         stream = FakeExecStream()
-        self.streams[sandbox_id] = stream
+        key = f"{sandbox_id}:w{window}" if cmd is None else f"{sandbox_id}:cmd"
+        self.streams[key] = stream
         return stream
 
     async def inject_env(self, sandbox_id: str, env: dict[str, str]) -> None:
@@ -313,7 +314,7 @@ def test_agent_setup_env_injected(client, fake_backend):
     assert resp.status_code == 200
     sb = list(fake_backend.sandboxes.values())[0]
     assert "AGENT_SETUP" in sb["env"]
-    assert "openclaw onboard" in sb["env"]["AGENT_SETUP"]
+    assert "openclaw gateway" in sb["env"]["AGENT_SETUP"]
 
 
 def test_get_session(client):
@@ -1591,3 +1592,112 @@ def test_cors_allows_configured_origin(client):
         },
     )
     assert resp.headers.get("access-control-allow-origin") == srv.ALLOWED_ORIGINS[0]
+
+
+# ---------------------------------------------------------------------------
+# Multi-window terminal tests
+# ---------------------------------------------------------------------------
+
+
+def test_session_response_has_vscode_url(client, fake_backend):
+    """Session response includes vscode_url for all agents."""
+    resp = client.post("/api/sessions", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["vscode_url"] is not None
+    assert "/vscode/" in data["vscode_url"]
+
+
+def test_session_response_has_logs_ws_url_for_openclaw(client, fake_backend):
+    """OpenClaw sessions include logs_ws_url."""
+    resp = client.post("/api/sessions", json={"agent_type": "openclaw"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["logs_ws_url"] is not None
+    assert "/ws/logs/" in data["logs_ws_url"]
+
+
+def test_session_response_no_logs_for_claude(client, fake_backend):
+    """Claude Code sessions have no logs_ws_url."""
+    resp = client.post("/api/sessions", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["logs_ws_url"] is None
+
+
+def test_get_session_includes_new_urls(client, fake_backend):
+    """GET session endpoint includes vscode_url and logs_ws_url."""
+    resp = client.post("/api/sessions", json={"agent_type": "openclaw"})
+    sid = resp.json()["session_id"]
+    resp = client.get(f"/api/sessions/{sid}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["vscode_url"] is not None
+    assert data["logs_ws_url"] is not None
+
+
+def test_exec_attach_accepts_window_param(fake_backend):
+    """FakeBackend exec_attach supports window parameter."""
+    import asyncio
+    loop = asyncio.new_event_loop()
+    try:
+        stream = loop.run_until_complete(
+            fake_backend.exec_attach("fake-id", window=2)
+        )
+        assert stream is not None
+        assert "fake-id:w2" in fake_backend.streams
+    finally:
+        loop.close()
+
+
+def test_exec_attach_accepts_cmd_param(fake_backend):
+    """FakeBackend exec_attach supports cmd parameter."""
+    import asyncio
+    loop = asyncio.new_event_loop()
+    try:
+        stream = loop.run_until_complete(
+            fake_backend.exec_attach("fake-id", cmd="tail -f /var/log/test")
+        )
+        assert stream is not None
+        assert "fake-id:cmd" in fake_backend.streams
+    finally:
+        loop.close()
+
+
+# ---------------------------------------------------------------------------
+# VS Code proxy tests
+# ---------------------------------------------------------------------------
+
+
+def test_vscode_proxy_404_nonexistent(client):
+    """VS Code proxy returns 404 for non-existent session."""
+    resp = client.get("/vscode/nonexistent/")
+    assert resp.status_code == 404
+
+
+def test_vscode_proxy_requires_auth(fake_backend):
+    """VS Code proxy requires auth when AUTH_REQUIRED=True."""
+    import server.server as srv
+    srv.backend = fake_backend
+    srv.sessions.clear()
+    original = srv.AUTH_REQUIRED
+    srv.AUTH_REQUIRED = True
+    try:
+        client = TestClient(srv.app, raise_server_exceptions=False)
+        resp = client.get("/vscode/nonexistent/")
+        assert resp.status_code == 401
+    finally:
+        srv.AUTH_REQUIRED = original
+
+
+def test_vscode_proxy_rejects_wrong_user(auth_client, fake_backend):
+    """VS Code proxy returns 403 for non-owner."""
+    cookie = _make_auth_cookie(login="user1")
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.post("/api/sessions", json={})
+    sid = resp.json()["session_id"]
+
+    auth_client.cookies.clear()
+    auth_client.cookies.set("remolt_auth", _make_auth_cookie(login="user2"))
+    resp = auth_client.get(f"/vscode/{sid}/")
+    assert resp.status_code == 403

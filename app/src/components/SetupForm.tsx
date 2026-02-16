@@ -39,17 +39,19 @@ function AgentCard({ agent, selected, onClick }: { agent: AgentInfo; selected: b
   );
 }
 
-export function SetupForm() {
-  const { createSession, phase, error, authUser, autoLaunch, agents } = useSession();
+export function SetupForm({ onOpenSettings }: { onOpenSettings: () => void }) {
+  const { createSession, phase, error, authUser, autoLaunch, agents, storedKeys } = useSession();
   const didAutoLaunch = useRef(false);
   const [repoUrl, setRepoUrl] = useState('');
   const [gitUserName, setGitUserName] = useState('');
   const [gitUserEmail, setGitUserEmail] = useState('');
   const [agentType, setAgentType] = useState('claude-code');
-  const [agentEnv, setAgentEnv] = useState<Record<string, string>>({});
 
   const hasOAuth = authUser && authUser.login !== 'anonymous';
   const selectedAgent = agents.find(a => a.id === agentType);
+
+  // Which keys does this agent need?
+  const requiredKeys = selectedAgent?.env_schema.map(e => e.key) || [];
 
   useEffect(() => {
     const p = loadPrefs();
@@ -86,7 +88,6 @@ export function SetupForm() {
       gitUserName: gitUserName || undefined,
       gitUserEmail: gitUserEmail || undefined,
       agentType,
-      agentEnv: Object.keys(agentEnv).length > 0 ? agentEnv : undefined,
     });
   };
 
@@ -108,10 +109,7 @@ export function SetupForm() {
                 key={agent.id}
                 agent={agent}
                 selected={agentType === agent.id}
-                onClick={() => {
-                  setAgentType(agent.id);
-                  setAgentEnv({});
-                }}
+                onClick={() => setAgentType(agent.id)}
               />
             ))}
           </div>
@@ -139,21 +137,30 @@ export function SetupForm() {
           </div>
         </div>
 
-        {selectedAgent && selectedAgent.env_schema.length > 0 && (
+        {requiredKeys.length > 0 && (
           <div className="form-section">
-            <h3>API Keys (optional)</h3>
-            {selectedAgent.env_schema.map(field => (
-              <div className="form-group" key={field.key}>
-                <label>{field.label}</label>
-                <input
-                  type={field.secret ? 'password' : 'text'}
-                  value={agentEnv[field.key] || ''}
-                  onChange={(e) => setAgentEnv(prev => ({ ...prev, [field.key]: e.target.value }))}
-                  placeholder={field.label}
-                  autoComplete="off"
-                />
-              </div>
-            ))}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+              <h3 style={{ margin: 0 }}>API Keys</h3>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={onOpenSettings}>
+                Manage Keys
+              </button>
+            </div>
+            <div className="key-status-list">
+              {requiredKeys.map(key => {
+                const isReady = storedKeys.includes(key);
+                const label = selectedAgent?.env_schema.find(e => e.key === key)?.label || key;
+                return (
+                  <div className="key-status-row" key={key}>
+                    <span className="key-status-label">{label}</span>
+                    {isReady ? (
+                      <span className="key-badge key-badge-configured">Ready</span>
+                    ) : (
+                      <span className="key-badge key-badge-missing">Not set</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 

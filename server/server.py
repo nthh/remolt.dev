@@ -284,8 +284,12 @@ class SandboxBackend(abc.ABC):
         """List managed sandboxes. Returns [{id, session_id, running}]."""
 
     @abc.abstractmethod
-    async def exec_attach(self, sandbox_id: str) -> ExecStream:
-        """Attach to sandbox with TTY. Returns an ExecStream."""
+    async def exec_attach(self, sandbox_id: str, *, window: int = 0, cmd: str | None = None) -> ExecStream:
+        """Attach to sandbox with TTY. Returns an ExecStream.
+
+        window: tmux session index (0=main, N=main-N)
+        cmd: custom command to run instead of tmux (e.g. tail -f for logs)
+        """
 
     @abc.abstractmethod
     async def inject_env(self, sandbox_id: str, env: dict[str, str]) -> None:
@@ -397,10 +401,15 @@ class DockerBackend(SandboxBackend):
             })
         return result
 
-    async def exec_attach(self, sandbox_id: str) -> ExecStream:
+    async def exec_attach(self, sandbox_id: str, *, window: int = 0, cmd: str | None = None) -> ExecStream:
         container = self._docker.containers.container(sandbox_id)
+        if cmd:
+            shell_cmd = cmd
+        else:
+            session_name = "main" if window == 0 else f"main-{window}"
+            shell_cmd = f"tmux new-session -As {session_name}"
         exec_inst = await container.exec(
-            cmd=["bash", "-lc", "tmux new-session -As main"],
+            cmd=["bash", "-lc", shell_cmd],
             stdin=True,
             stdout=True,
             stderr=True,
@@ -416,7 +425,7 @@ class DockerBackend(SandboxBackend):
         container = self._docker.containers.container(sandbox_id)
         # Write env vars to a profile file, then run entrypoint setup
         # Separate secrets from non-secret env for setup
-        secret_keys = {"GITHUB_TOKEN", "ANTHROPIC_API_KEY"}
+        secret_keys = {"GITHUB_TOKEN"} | STORED_KEY_NAMES
         safe_lines = [f"export {k}={shlex.quote(v)}" for k, v in env.items() if k not in secret_keys]
         secret_lines = [f"export {k}={shlex.quote(v)}" for k, v in env.items() if k in secret_keys]
         script = " && ".join([
@@ -629,12 +638,19 @@ class K8sBackend(SandboxBackend):
             })
         return result
 
-    async def exec_attach(self, sandbox_id: str) -> ExecStream:
+    async def exec_attach(self, sandbox_id: str, *, window: int = 0, cmd: str | None = None) -> ExecStream:
         import websockets
+        from urllib.parse import quote
+
+        if cmd:
+            shell_cmd = cmd
+        else:
+            session_name = "main" if window == 0 else f"main-{window}"
+            shell_cmd = f"tmux new-session -As {session_name}"
 
         # Build exec URL
         params = (
-            "command=bash&command=-lc&command=tmux+new-session+-As+main"
+            f"command=bash&command=-lc&command={quote(shell_cmd)}"
             "&stdin=true&stdout=true&stderr=true&tty=true"
         )
         url = (
@@ -656,7 +672,7 @@ class K8sBackend(SandboxBackend):
         import websockets
         from urllib.parse import quote
 
-        secret_keys = {"GITHUB_TOKEN", "ANTHROPIC_API_KEY"}
+        secret_keys = {"GITHUB_TOKEN"} | STORED_KEY_NAMES
         safe_lines = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env.items() if k not in secret_keys)
         secret_lines = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env.items() if k in secret_keys)
         script = (
@@ -938,12 +954,16 @@ def _decrypt_cookie(token: str) -> dict | None:
         return None
 
 
+STORED_KEY_NAMES = {"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY"}
+
+
 @dataclass
 class AuthUser:
     login: str
     name: str
     email: str
     gh_token: str
+    api_keys: dict[str, str] = field(default_factory=dict)
 
 
 async def get_current_user(request) -> AuthUser | None:
@@ -957,6 +977,7 @@ async def get_current_user(request) -> AuthUser | None:
     if not data:
         return None
     try:
+        data.setdefault("api_keys", {})
         return AuthUser(**data)
     except Exception:
         return None
@@ -965,7 +986,7 @@ async def get_current_user(request) -> AuthUser | None:
 def require_auth(request) -> AuthUser:
     """Raise 401 if not authenticated."""
     if not AUTH_REQUIRED:
-        return AuthUser(login="anonymous", name="", email="", gh_token="")
+        return AuthUser(login="anonymous", name="", email="", gh_token="", api_keys={})
     cookie = request.cookies.get("remolt_auth")
     if not cookie:
         raise HTTPException(401, "Authentication required")
@@ -973,6 +994,7 @@ def require_auth(request) -> AuthUser:
     if not data:
         raise HTTPException(401, "Invalid session")
     try:
+        data.setdefault("api_keys", {})
         return AuthUser(**data)
     except Exception:
         raise HTTPException(401, "Invalid session")
@@ -1050,6 +1072,12 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
                         email = e.get("email", "")
                         break
 
+    # Preserve existing api_keys from previous cookie
+    existing_api_keys: dict[str, str] = {}
+    existing_user = await get_current_user(request)
+    if existing_user:
+        existing_api_keys = existing_user.api_keys
+
     resp = RedirectResponse("/?authed=1")
     resp.set_cookie(
         "remolt_auth", _encrypt_cookie({
@@ -1057,6 +1085,7 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
             "name": user.get("name", "") or "",
             "email": email,
             "gh_token": gh_token,
+            "api_keys": existing_api_keys,
         }),
         httponly=True, secure=True, samesite="lax", max_age=86400,
     )
@@ -1073,6 +1102,7 @@ async def auth_me(request: Request):
         "name": user.name,
         "email": user.email,
         "auth_required": AUTH_REQUIRED,
+        "stored_keys": list(user.api_keys.keys()),
     }
 
 
@@ -1080,6 +1110,59 @@ async def auth_me(request: Request):
 async def auth_logout():
     resp = RedirectResponse("/", status_code=303)
     resp.delete_cookie("remolt_auth")
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# API key management
+# ---------------------------------------------------------------------------
+
+
+def _set_auth_cookie(resp: Response, user: AuthUser) -> None:
+    """Re-encrypt and set the auth cookie from an AuthUser."""
+    resp.set_cookie(
+        "remolt_auth", _encrypt_cookie({
+            "login": user.login,
+            "name": user.name,
+            "email": user.email,
+            "gh_token": user.gh_token,
+            "api_keys": user.api_keys,
+        }),
+        httponly=True, secure=True, samesite="lax", max_age=86400,
+    )
+
+
+@app.get("/api/keys")
+async def api_get_keys(request: Request):
+    user = require_auth(request)
+    return {"keys": list(user.api_keys.keys())}
+
+
+@app.put("/api/keys")
+async def api_put_keys(request: Request):
+    user = require_auth(request)
+    body = await request.json()
+    keys: dict = body.get("keys", {})
+    for name, value in keys.items():
+        if name not in STORED_KEY_NAMES:
+            continue
+        if value:
+            user.api_keys[name] = value
+        else:
+            user.api_keys.pop(name, None)
+    resp = JSONResponse({"keys": list(user.api_keys.keys())})
+    _set_auth_cookie(resp, user)
+    return resp
+
+
+@app.delete("/api/keys/{key_name}")
+async def api_delete_key(request: Request, key_name: str):
+    user = require_auth(request)
+    if key_name not in STORED_KEY_NAMES:
+        raise HTTPException(400, f"Unknown key: {key_name}")
+    user.api_keys.pop(key_name, None)
+    resp = JSONResponse({"keys": list(user.api_keys.keys())})
+    _set_auth_cookie(resp, user)
     return resp
 
 
@@ -1104,6 +1187,8 @@ class SessionResp(BaseModel):
     ws_url: str
     agent_type: str = "claude-code"
     proxy_url: str | None = None
+    vscode_url: str | None = None
+    logs_ws_url: str | None = None
 
 
 @app.get("/health")
@@ -1152,7 +1237,13 @@ async def api_create_session(request: Request, body: CreateSessionReq):
     for k, v in agent.env_defaults.items():
         env.setdefault(k, v)
 
-    # Inject agent-specific env vars from request
+    # Auto-inject stored API keys that match the agent's env_schema
+    schema_keys = {e["key"] for e in agent.env_schema}
+    for key_name, key_value in user.api_keys.items():
+        if key_name in schema_keys and key_name not in env:
+            env[key_name] = key_value
+
+    # Inject agent-specific env vars from request (explicit wins over stored)
     if body.agent_env:
         # Only allow keys defined in agent's env_schema
         allowed_keys = {e["key"] for e in agent.env_schema}
@@ -1166,7 +1257,7 @@ async def api_create_session(request: Request, body: CreateSessionReq):
     if agent.welcome:
         env["AGENT_WELCOME"] = agent.welcome
 
-    SECRET_KEYS = {"GITHUB_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"}
+    SECRET_KEYS = {"GITHUB_TOKEN"} | STORED_KEY_NAMES
     safe_env = {k: v for k, v in env.items() if k not in SECRET_KEYS}
 
     image = _agent_image(agent_type)
@@ -1206,9 +1297,11 @@ async def api_create_session(request: Request, body: CreateSessionReq):
     save_sessions()
 
     proxy_url = f"/proxy/{sid}/" if agent.ports else None
+    logs_ws_url = f"/ws/logs/{sid}" if agent.ports else None
     return SessionResp(
         session_id=sid, status="running", ws_url=f"/ws/terminal/{sid}",
         agent_type=agent_type, proxy_url=proxy_url,
+        vscode_url=f"/vscode/{sid}/", logs_ws_url=logs_ws_url,
     )
 
 
@@ -1222,9 +1315,11 @@ async def api_get_session(request: Request, session_id: str):
         raise HTTPException(403, "Not authorized")
     agent = AGENTS.get(s.agent_type)
     proxy_url = f"/proxy/{s.session_id}/" if agent and agent.ports else None
+    logs_ws_url = f"/ws/logs/{s.session_id}" if agent and agent.ports else None
     return SessionResp(
         session_id=s.session_id, status=s.status.value, ws_url=f"/ws/terminal/{s.session_id}",
         agent_type=s.agent_type, proxy_url=proxy_url,
+        vscode_url=f"/vscode/{s.session_id}/", logs_ws_url=logs_ws_url,
     )
 
 
@@ -1322,6 +1417,9 @@ def _inject_ws_auth_token(text: str, token: str) -> str:
             auth = params.setdefault("auth", {})
             if not auth.get("token"):
                 auth["token"] = token
+            # Remove device auth — the browser generates invalid device
+            # signatures when proxied; token auth is sufficient.
+            params.pop("device", None)
             return _json.dumps(frame)
     except (ValueError, TypeError):
         pass
@@ -1576,11 +1674,14 @@ async def ws_terminal(ws: WebSocket, session_id: str):
     await ws.accept()
     assert backend is not None
 
+    # Parse optional window parameter for multi-terminal tabs
+    window = int(ws.query_params.get("window", "0"))
+
     # Retry exec_attach — sandbox may still be starting
     stream = None
     for attempt in range(10):
         try:
-            stream = await backend.exec_attach(s.sandbox_id)
+            stream = await backend.exec_attach(s.sandbox_id, window=window)
             break
         except Exception as e:
             if attempt < 9:
@@ -1659,6 +1760,222 @@ async def ws_terminal(ws: WebSocket, session_id: str):
 
     emit("terminal.disconnected", session_id=session_id)
     logger.info(f"Terminal session {session_id} disconnected")
+
+
+# ---------------------------------------------------------------------------
+# Logs WebSocket endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/logs/{session_id}")
+async def ws_logs(ws: WebSocket, session_id: str):
+    """Stream agent log files from the sandbox (read-only terminal)."""
+    origin = ws.headers.get("origin")
+    if origin and origin not in ALLOWED_ORIGINS:
+        await ws.close(code=4003, reason="Invalid origin")
+        return
+
+    s = sessions.get(session_id)
+    if not s or s.status != Status.RUNNING:
+        await ws.close(code=4004, reason="Session not found")
+        return
+
+    if AUTH_REQUIRED:
+        user = await get_current_user(ws)
+        if not user:
+            await ws.close(code=4003, reason="Not authorized")
+            return
+        if not s.owner or user.login != s.owner:
+            await ws.close(code=4003, reason="Not authorized")
+            return
+
+    # Only agents with ports (dashboard agents) have logs
+    agent = AGENTS.get(s.agent_type)
+    if not agent or not agent.ports:
+        await ws.close(code=4004, reason="No logs for this agent")
+        return
+
+    await ws.accept()
+    assert backend is not None
+
+    # Tail agent log files — wait for them to appear
+    log_cmd = (
+        "bash -c '"
+        'LOG=/home/dev/.openclaw/logs/gateway.log; '
+        'while [ ! -f "$LOG" ]; do echo "Waiting for logs..."; sleep 2; done; '
+        'tail -n 200 -f "$LOG"'
+        "'"
+    )
+
+    stream = None
+    for attempt in range(10):
+        try:
+            stream = await backend.exec_attach(s.sandbox_id, cmd=log_cmd)
+            break
+        except Exception as e:
+            if attempt < 9:
+                await asyncio.sleep(2)
+            else:
+                await ws.close(code=4005, reason="Failed to attach to sandbox")
+                return
+
+    async def read_from_sandbox():
+        try:
+            while True:
+                data = await stream.read()
+                if data is None:
+                    break
+                if data:
+                    await ws.send_bytes(data)
+        except (asyncio.CancelledError, WebSocketDisconnect):
+            pass
+        except Exception:
+            pass
+
+    async def read_from_client():
+        try:
+            while True:
+                msg = await ws.receive()
+                if msg["type"] == "websocket.disconnect":
+                    break
+                # Handle resize events only (read-only terminal)
+                if "text" in msg and msg["text"]:
+                    try:
+                        ctrl = _json.loads(msg["text"])
+                        if ctrl.get("type") == "resize":
+                            await stream.resize(ctrl.get("cols", 120), ctrl.get("rows", 30))
+                    except Exception:
+                        pass
+        except (WebSocketDisconnect, asyncio.CancelledError):
+            pass
+        except Exception:
+            pass
+
+    sandbox_task = asyncio.create_task(read_from_sandbox())
+    client_task = asyncio.create_task(read_from_client())
+
+    try:
+        done, pending = await asyncio.wait(
+            [sandbox_task, client_task], return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+    finally:
+        await stream.close()
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# VS Code proxy (code-server on port 18080)
+# ---------------------------------------------------------------------------
+
+VSCODE_PORT = 18080
+
+_VSCODE_LOADING_HTML = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Starting VS Code...</title>
+<meta http-equiv="refresh" content="3">
+<style>body{background:#1a1b26;color:#a9b1d6;font-family:system-ui;display:flex;
+align-items:center;justify-content:center;height:100vh;margin:0}
+.wrap{text-align:center}.spinner{width:32px;height:32px;border:3px solid #33467c;
+border-top-color:#7aa2f7;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}</style></head>
+<body><div class="wrap"><div class="spinner"></div>Starting VS Code...</div></body></html>"""
+
+
+def _validate_vscode_access(request, session_id: str) -> Session:
+    """Validate auth and return session for VS Code proxy routes."""
+    user = require_auth(request)
+    s = sessions.get(session_id)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    if AUTH_REQUIRED and s.owner and s.owner != user.login:
+        raise HTTPException(403, "Not authorized")
+    return s
+
+
+@app.api_route("/vscode/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+async def vscode_proxy(request: Request, session_id: str, path: str = ""):
+    s = _validate_vscode_access(request, session_id)
+    ip = await _resolve_sandbox_ip(s.sandbox_id)
+    target_url = f"http://{ip}:{VSCODE_PORT}/{path}"
+    body = await request.body()
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.request(
+                method=request.method,
+                url=target_url,
+                content=body,
+                headers=headers,
+                params=dict(request.query_params),
+            )
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        return Response(content=_VSCODE_LOADING_HTML, status_code=200,
+                        media_type="text/html")
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        headers=dict(resp.headers),
+    )
+
+
+@app.websocket("/vscode/{session_id}/{path:path}")
+async def ws_vscode_proxy(ws: WebSocket, session_id: str, path: str = ""):
+    import websockets
+    from urllib.parse import urlencode
+
+    s = _validate_vscode_access(ws, session_id)
+    ip = await _resolve_sandbox_ip(s.sandbox_id)
+    qs = urlencode(dict(ws.query_params)) if ws.query_params else ""
+    target_url = f"ws://{ip}:{VSCODE_PORT}/{path}{'?' + qs if qs else ''}"
+
+    await ws.accept()
+
+    try:
+        async with websockets.connect(target_url, proxy=None) as upstream:
+            async def client_to_upstream():
+                try:
+                    while True:
+                        msg = await ws.receive()
+                        if msg["type"] == "websocket.disconnect":
+                            break
+                        if "text" in msg and msg["text"]:
+                            await upstream.send(msg["text"])
+                        elif "bytes" in msg and msg["bytes"]:
+                            await upstream.send(msg["bytes"])
+                except (WebSocketDisconnect, asyncio.CancelledError):
+                    pass
+
+            async def upstream_to_client():
+                try:
+                    async for data in upstream:
+                        if isinstance(data, str):
+                            await ws.send_text(data)
+                        else:
+                            await ws.send_bytes(data)
+                except (WebSocketDisconnect, asyncio.CancelledError):
+                    pass
+
+            await asyncio.gather(
+                asyncio.create_task(client_to_upstream()),
+                asyncio.create_task(upstream_to_client()),
+                return_exceptions=True,
+            )
+    except Exception as e:
+        logger.warning(f"VS Code WS proxy error for {session_id}: {e}")
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
