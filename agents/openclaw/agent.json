@@ -3,7 +3,7 @@
   "name": "OpenClaw",
   "description": "Autonomous AI agent with web dashboard",
   "install": "npm install -g openclaw",
-  "setup": "mkdir -p /home/dev/.openclaw && echo '{\"gateway\":{\"mode\":\"local\",\"auth\":{\"token\":\"sandbox\"},\"controlUi\":{\"allowedOrigins\":[\"https://remolt.dev\"],\"allowInsecureAuth\":true}}}' > /home/dev/.openclaw/openclaw.json && echo '[ ! -f /tmp/.openclaw-onboarded ] && touch /tmp/.openclaw-onboarded && openclaw onboard --install-daemon' >> /home/dev/.bashrc",
+  "setup": "NONINTERACTIVE=1 /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\" && echo 'eval \"$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)\"' >> /home/dev/.bashrc && mkdir -p /home/dev/.openclaw/logs && echo '{\"gateway\":{\"mode\":\"local\",\"auth\":{\"token\":\"sandbox\"},\"controlUi\":{\"allowedOrigins\":[\"https://remolt.dev\"],\"allowInsecureAuth\":true}}}' > /home/dev/.openclaw/openclaw.json && openclaw gateway --verbose --bind lan --port 18789 > /home/dev/.openclaw/logs/gateway.log 2>&1 &",
   "ports": [{ "port": 18789, "label": "Dashboard", "health_check": "/", "auth_token": "sandbox" }],
   "resources": {
     "requests": { "cpu": "500m", "memory": "1Gi" },
@@ -12,8 +12,10 @@
   "env_defaults": { "OPENCLAW_GATEWAY_PORT": "18789" },
   "env_schema": [
     { "key": "OPENAI_API_KEY", "label": "OpenAI API Key", "secret": true, "required": false },
-    { "key": "ANTHROPIC_API_KEY", "label": "Anthropic API Key", "secret": true, "required": false }
+    { "key": "ANTHROPIC_API_KEY", "label": "Anthropic API Key", "secret": true, "required": false },
+    { "key": "GEMINI_API_KEY", "label": "Gemini API Key", "secret": true, "required": false },
+    { "key": "OPENROUTER_API_KEY", "label": "OpenRouter API Key", "secret": true, "required": false }
   ],
-  "welcome": "Starting OpenClaw setup wizard...\nWhen setup is complete, switch to the Dashboard tab.",
+  "welcome": "OpenClaw dashboard is starting on port 18789.\nSwitch to the Dashboard tab in the header to access the web UI.",
   "warm_pool": false
 }

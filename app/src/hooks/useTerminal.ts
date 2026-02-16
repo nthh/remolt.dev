@@ -9,7 +9,12 @@ const RECONNECT_BASE_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 5000;
 const URL_REGEX = /https?:\/\/[^\s\x1b\x00-\x1f]{20,}/g;
 
-export function useTerminal(wsUrl: string | null) {
+interface UseTerminalOptions {
+  readOnly?: boolean;
+}
+
+export function useTerminal(wsUrl: string | null, options: UseTerminalOptions = {}) {
+  const { readOnly = false } = options;
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -56,7 +61,8 @@ export function useTerminal(wsUrl: string | null) {
     setAuthUrl(null);
 
     const term = new Terminal({
-      cursorBlink: true,
+      cursorBlink: !readOnly,
+      disableStdin: readOnly,
       fontSize: 14,
       scrollback: 10000,
       fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
@@ -175,11 +181,13 @@ export function useTerminal(wsUrl: string | null) {
 
     connect();
 
-    term.onData((data) => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(encoder.encode(data));
-      }
-    });
+    if (!readOnly) {
+      term.onData((data) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(encoder.encode(data));
+        }
+      });
+    }
 
     // Click anywhere on the terminal container to focus (helps with padding areas)
     const el = containerRef.current;
@@ -214,7 +222,7 @@ export function useTerminal(wsUrl: string | null) {
       termRef.current = null;
       term.dispose();
     };
-  }, [wsUrl, checkForUrls]);
+  }, [wsUrl, readOnly, checkForUrls]);
 
   const sendText = useCallback((text: string) => {
     if (text && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {

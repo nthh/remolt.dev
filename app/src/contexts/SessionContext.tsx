@@ -10,6 +10,8 @@ interface SessionInfo {
   ws_url: string;
   agent_type: string;
   proxy_url: string | null;
+  vscode_url: string | null;
+  logs_ws_url: string | null;
 }
 
 interface AuthUser {
@@ -17,6 +19,7 @@ interface AuthUser {
   name: string;
   email: string;
   auth_required: boolean;
+  stored_keys: string[];
 }
 
 export interface AgentInfo {
@@ -36,6 +39,7 @@ interface SessionContextType {
   authUser: AuthUser | null;
   autoLaunch: boolean;
   agents: AgentInfo[];
+  storedKeys: string[];
   createSession: (params: {
     repoUrl?: string;
     gitUserName?: string;
@@ -44,6 +48,8 @@ interface SessionContextType {
     agentEnv?: Record<string, string>;
   }) => Promise<void>;
   destroySession: () => Promise<void>;
+  updateKeys: (keys: Record<string, string>) => Promise<void>;
+  deleteKey: (keyName: string) => Promise<void>;
 }
 
 const SessionContext = createContext<SessionContextType | null>(null);
@@ -55,6 +61,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [autoLaunch, setAutoLaunch] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [storedKeys, setStoredKeys] = useState<string[]>([]);
 
   const wsUrl = session
     ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${session.ws_url}`
@@ -73,6 +80,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (authRes.ok) {
           const user: AuthUser = await authRes.json();
           setAuthUser(user);
+          setStoredKeys(user.stored_keys || []);
         }
       } catch {
         // Server unreachable — proceed without auth (local dev)
@@ -188,8 +196,28 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setError(null);
   }, [session]);
 
+  const updateKeys = useCallback(async (keys: Record<string, string>) => {
+    const res = await fetch('/api/keys', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setStoredKeys(data.keys || []);
+    }
+  }, []);
+
+  const deleteKey = useCallback(async (keyName: string) => {
+    const res = await fetch(`/api/keys/${keyName}`, { method: 'DELETE' });
+    if (res.ok) {
+      const data = await res.json();
+      setStoredKeys(data.keys || []);
+    }
+  }, []);
+
   return (
-    <SessionContext.Provider value={{ session, phase, error, wsUrl, authUser, autoLaunch, agents, createSession, destroySession }}>
+    <SessionContext.Provider value={{ session, phase, error, wsUrl, authUser, autoLaunch, agents, storedKeys, createSession, destroySession, updateKeys, deleteKey }}>
       {children}
     </SessionContext.Provider>
   );

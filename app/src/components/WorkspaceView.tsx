@@ -1,0 +1,119 @@
+import { useState, useCallback, useMemo } from 'react';
+import { useSession } from '../contexts/SessionContext';
+import { TabBar } from './TabBar';
+import { TerminalPanel } from './TerminalPanel';
+import { DashboardPanel } from './DashboardPanel';
+import { LogsPanel } from './LogsPanel';
+import { VSCodePanel } from './VSCodePanel';
+
+interface Tab {
+  id: string;
+  type: 'terminal' | 'logs' | 'dashboard' | 'vscode';
+  label: string;
+  window?: number;
+}
+
+const MAX_TERMINALS = 5;
+
+export function WorkspaceView({ onOpenSettings }: { onOpenSettings: () => void }) {
+  const { session, wsUrl, destroySession } = useSession();
+  const hasDashboard = !!session?.proxy_url;
+
+  const [terminalTabs, setTerminalTabs] = useState<Tab[]>([
+    { id: 'term-0', type: 'terminal', label: 'Term 1', window: 0 },
+  ]);
+  const [activeTabId, setActiveTabId] = useState('term-0');
+  const [nextTermNum, setNextTermNum] = useState(2);
+  const [nextWindow, setNextWindow] = useState(1);
+
+  const addTerminal = useCallback(() => {
+    if (terminalTabs.length >= MAX_TERMINALS) return;
+    const id = `term-${nextWindow}`;
+    const tab: Tab = { id, type: 'terminal', label: `Term ${nextTermNum}`, window: nextWindow };
+    setTerminalTabs(prev => [...prev, tab]);
+    setActiveTabId(id);
+    setNextTermNum(n => n + 1);
+    setNextWindow(w => w + 1);
+  }, [terminalTabs.length, nextTermNum, nextWindow]);
+
+  const closeTab = useCallback((tabId: string) => {
+    setTerminalTabs(prev => {
+      if (prev.length <= 1) return prev;
+      const idx = prev.findIndex(t => t.id === tabId);
+      if (idx === -1) return prev;
+      const next = prev.filter(t => t.id !== tabId);
+      if (activeTabId === tabId) {
+        const newIdx = Math.min(idx, next.length - 1);
+        setActiveTabId(next[newIdx].id);
+      }
+      return next;
+    });
+  }, [activeTabId]);
+
+  const terminalWsUrl = useCallback((window: number) => {
+    if (!wsUrl) return null;
+    return window === 0 ? wsUrl : `${wsUrl}?window=${window}`;
+  }, [wsUrl]);
+
+  const logsWsUrl = useMemo(() => {
+    if (!session || !hasDashboard) return null;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${location.host}/ws/logs/${session.session_id}`;
+  }, [session, hasDashboard]);
+
+  const vscodeUrl = useMemo(() => {
+    if (!session) return null;
+    return `/vscode/${session.session_id}/`;
+  }, [session]);
+
+  const serviceTabs: Tab[] = useMemo(() => {
+    const tabs: Tab[] = [];
+    if (hasDashboard) {
+      tabs.push({ id: 'logs', type: 'logs', label: 'Logs' });
+      tabs.push({ id: 'dashboard', type: 'dashboard', label: 'Dashboard' });
+    }
+    tabs.push({ id: 'vscode', type: 'vscode', label: 'VS Code' });
+    return tabs;
+  }, [hasDashboard]);
+
+  return (
+    <div className="terminal-container">
+      <TabBar
+        terminalTabs={terminalTabs}
+        serviceTabs={serviceTabs}
+        activeTabId={activeTabId}
+        onSelectTab={setActiveTabId}
+        onAddTerminal={addTerminal}
+        onCloseTab={closeTab}
+        canAddTerminal={terminalTabs.length < MAX_TERMINALS}
+        onEndSession={destroySession}
+        onOpenSettings={onOpenSettings}
+      />
+      <div className="workspace-content">
+        {terminalTabs.map(tab => (
+          <TerminalPanel
+            key={tab.id}
+            wsUrl={terminalWsUrl(tab.window!)}
+            visible={activeTabId === tab.id}
+          />
+        ))}
+        {hasDashboard && (
+          <>
+            <LogsPanel
+              wsUrl={logsWsUrl}
+              visible={activeTabId === 'logs'}
+            />
+            <DashboardPanel
+              proxyUrl={session!.proxy_url!}
+              visible={activeTabId === 'dashboard'}
+            />
+          </>
+        )}
+        <VSCodePanel
+          url={vscodeUrl}
+          visible={activeTabId === 'vscode'}
+        />
+      </div>
+    </div>
+  );
+}

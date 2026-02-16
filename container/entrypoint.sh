@@ -57,6 +57,9 @@ If you encounter a bug or have a feature request for remolt:
 See `~/remolt-dev/CLAUDE.md` for full architecture details and conventions.
 CLAUDEMD
 
+# Start code-server (VS Code in browser) on port 18080
+code-server --bind-addr 0.0.0.0:18080 --auth none --disable-telemetry /home/dev/workspace &
+
 # Run agent setup command if provided (e.g., start OpenClaw gateway)
 if [ -n "$AGENT_SETUP" ]; then
     eval "$AGENT_SETUP" || echo "Warning: agent setup command failed"
