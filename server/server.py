@@ -1460,6 +1460,9 @@ async def proxy_agent_ui(request: Request, session_id: str, path: str = ""):
                         media_type="text/html")
     content = resp.content
     resp_headers = dict(resp.headers)
+    # Strip headers that block iframe embedding
+    for hdr in ("x-frame-options", "content-security-policy"):
+        resp_headers.pop(hdr, None)
     # Rewrite base path in dashboard HTML for relative asset loading
     ct = resp_headers.get("content-type", "")
     if "text/html" in ct and b"__OPENCLAW_CONTROL_UI_BASE_PATH__" in content:
