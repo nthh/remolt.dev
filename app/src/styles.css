@@ -34,6 +34,7 @@ html, body, #root {
   justify-content: center;
   min-height: 100%;
   padding: 40px 20px;
+  overflow-y: auto;
 }
 
 .setup-card {
@@ -44,6 +45,21 @@ html, body, #root {
   width: 100%;
   max-width: 480px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+@media (max-width: 640px) {
+  .setup-container {
+    align-items: flex-start;
+    padding: 20px 16px;
+  }
+
+  .setup-card {
+    padding: 24px 20px;
+  }
+
+  .agent-cards {
+    flex-direction: column;
+  }
 }
 
 .setup-card h1 {
