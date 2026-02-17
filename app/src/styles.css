@@ -139,6 +139,7 @@ html, body, #root {
 
 .agent-card {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -203,6 +204,71 @@ html, body, #root {
   margin-bottom: 14px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
+}
+
+/* Styled radio & checkbox inputs */
+.scope-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 auto 12px;
+  max-width: 20rem;
+  text-align: left;
+}
+
+.scope-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fg);
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.scope-option:hover {
+  border-color: var(--fg-muted);
+  background: var(--bg-hover);
+}
+
+.scope-option input[type="radio"],
+.scope-option input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--fg-muted);
+  background: var(--bg);
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.scope-option input[type="radio"] {
+  border-radius: 50%;
+}
+
+.scope-option input[type="checkbox"] {
+  border-radius: 4px;
+}
+
+.scope-option input[type="radio"]:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--bg);
+}
+
+.scope-option input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' fill='%231a1b26' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12.207 4.793a1 1 0 0 1 0 1.414l-5 5a1 1 0 0 1-1.414 0l-2-2a1 1 0 0 1 1.414-1.414L6.5 9.086l4.293-4.293a1 1 0 0 1 1.414 0z'/%3E%3C/svg%3E");
+  background-size: 12px;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 .btn {

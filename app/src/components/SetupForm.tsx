@@ -4,7 +4,6 @@ import { useSession, type AgentInfo } from '../contexts/SessionContext';
 const PREFS_KEY = 'remolt:prefs';
 
 interface Prefs {
-  repoUrl: string;
   gitUserName: string;
   gitUserEmail: string;
   agentType: string;
@@ -14,7 +13,7 @@ function loadPrefs(): Prefs {
   try {
     return JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
   } catch {
-    return { repoUrl: '', gitUserName: '', gitUserEmail: '', agentType: 'claude-code' };
+    return { gitUserName: '', gitUserEmail: '', agentType: 'claude-code' };
   }
 }
 
@@ -42,7 +41,6 @@ function AgentCard({ agent, selected, onClick }: { agent: AgentInfo; selected: b
 export function SetupForm({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { createSession, phase, error, authUser, autoLaunch, agents, storedKeys } = useSession();
   const didAutoLaunch = useRef(false);
-  const [repoUrl, setRepoUrl] = useState('');
   const [gitUserName, setGitUserName] = useState('');
   const [gitUserEmail, setGitUserEmail] = useState('');
   const [agentType, setAgentType] = useState('claude-code');
@@ -52,10 +50,10 @@ export function SetupForm({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   // Which keys does this agent need?
   const requiredKeys = selectedAgent?.env_schema.map(e => e.key) || [];
+  const configuredKeys = requiredKeys.filter(k => storedKeys.includes(k));
 
   useEffect(() => {
     const p = loadPrefs();
-    if (p.repoUrl) setRepoUrl(p.repoUrl);
     if (p.agentType) setAgentType(p.agentType);
     // Pre-fill git identity from OAuth, then override with saved prefs
     if (hasOAuth) {
@@ -72,7 +70,6 @@ export function SetupForm({ onOpenSettings }: { onOpenSettings: () => void }) {
       didAutoLaunch.current = true;
       const p = loadPrefs();
       createSession({
-        repoUrl: p.repoUrl || undefined,
         gitUserName: p.gitUserName || undefined,
         gitUserEmail: p.gitUserEmail || undefined,
         agentType: p.agentType || undefined,
@@ -82,9 +79,8 @@ export function SetupForm({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    savePrefs({ repoUrl, gitUserName, gitUserEmail, agentType });
+    savePrefs({ gitUserName, gitUserEmail, agentType });
     createSession({
-      repoUrl: repoUrl || undefined,
       gitUserName: gitUserName || undefined,
       gitUserEmail: gitUserEmail || undefined,
       agentType,
@@ -115,28 +111,6 @@ export function SetupForm({ onOpenSettings }: { onOpenSettings: () => void }) {
           </div>
         )}
 
-        <div className="form-section">
-          <h3>Repository (optional)</h3>
-          <div className="form-group">
-            <label>Repository URL</label>
-            <input
-              type="text"
-              value={repoUrl}
-              onChange={(e) => setRepoUrl(e.target.value)}
-              placeholder="https://github.com/user/repo"
-            />
-            {hasOAuth ? (
-              <span className="form-hint">
-                Your GitHub token is available in the sandbox for private repo access.
-              </span>
-            ) : (
-              <span className="form-hint">
-                Run <code>gh auth login</code> in the terminal to authenticate with GitHub for private repos.
-              </span>
-            )}
-          </div>
-        </div>
-
         {requiredKeys.length > 0 && (
           <div className="form-section">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
@@ -145,22 +119,21 @@ export function SetupForm({ onOpenSettings }: { onOpenSettings: () => void }) {
                 Manage Keys
               </button>
             </div>
-            <div className="key-status-list">
-              {requiredKeys.map(key => {
-                const isReady = storedKeys.includes(key);
-                const label = selectedAgent?.env_schema.find(e => e.key === key)?.label || key;
-                return (
-                  <div className="key-status-row" key={key}>
-                    <span className="key-status-label">{label}</span>
-                    {isReady ? (
+            {configuredKeys.length > 0 ? (
+              <div className="key-status-list">
+                {configuredKeys.map(key => {
+                  const label = selectedAgent?.env_schema.find(e => e.key === key)?.label || key;
+                  return (
+                    <div className="key-status-row" key={key}>
+                      <span className="key-status-label">{label}</span>
                       <span className="key-badge key-badge-configured">Ready</span>
-                    ) : (
-                      <span className="key-badge key-badge-missing">Not set</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <span className="form-hint">No keys configured yet. Click Manage Keys to add them.</span>
+            )}
           </div>
         )}
 

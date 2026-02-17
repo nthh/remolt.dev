@@ -22,20 +22,20 @@ function LoginScreen() {
         <p style={{ fontSize: '0.85rem', opacity: 0.7, margin: '1rem 0 0.75rem' }}>
           Sign in with GitHub to verify your identity. No permissions are required unless you opt in below.
         </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', margin: '0 auto 0.75rem', maxWidth: '20rem', textAlign: 'left' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+        <div className="scope-options">
+          <label className="scope-option">
             <input type="radio" name="repo-scope" checked={repoScope === 'none'} onChange={() => setRepoScope('none')} />
             No repository access
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+          <label className="scope-option">
             <input type="radio" name="repo-scope" checked={repoScope === 'public'} onChange={() => setRepoScope('public')} />
             Push to public repositories
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+          <label className="scope-option">
             <input type="radio" name="repo-scope" checked={repoScope === 'private'} onChange={() => setRepoScope('private')} />
             Access private repositories
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem', marginTop: '0.25rem' }}>
+          <label className="scope-option" style={{ marginTop: '4px' }}>
             <input type="checkbox" checked={emailScope} onChange={(e) => setEmailScope(e.target.checked)} />
             Share your email for git commits
           </label>
