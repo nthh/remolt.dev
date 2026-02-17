@@ -135,18 +135,19 @@ export function useTerminal(wsUrl: string | null, options: UseTerminalOptions = 
       if (!copyOnSelectRef.current) return;
       const sel = term.getSelection();
       if (sel) {
-        try {
-          const ta = document.createElement('textarea');
-          ta.value = sel;
-          ta.style.position = 'fixed';
-          ta.style.opacity = '0';
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand('copy');
-          document.body.removeChild(ta);
-        } catch {
-          navigator.clipboard.writeText(sel).catch(() => {});
-        }
+        navigator.clipboard.writeText(sel).catch(() => {
+          // Clipboard API denied — fall back to deprecated execCommand
+          try {
+            const ta = document.createElement('textarea');
+            ta.value = sel;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+          } catch { /* ignore */ }
+        });
       }
     });
 
