@@ -917,13 +917,13 @@ def test_auth_login_redirects_to_github(client):
         location = resp.headers["location"]
         assert "github.com/login/oauth/authorize" in location
         assert "client_id=test-client-id" in location
-        assert "public_repo" in location  # always included so users can create PRs
-        assert "scope=" in location
-        # full "repo" scope (private repo access) should NOT be included by default
+        # Default: no scopes requested — scope param is empty
         from urllib.parse import urlparse, parse_qs
-        scope = parse_qs(urlparse(location).query)["scope"][0]
-        assert "public_repo" in scope
-        assert scope.split() == ["read:user", "user:email", "public_repo"]
+        scope = parse_qs(urlparse(location).query).get("scope", [""])[0]
+        assert scope == ""
+        # Ensure no privileged scopes leak in by default
+        assert "public_repo" not in location
+        assert "read:user" not in location
     finally:
         srv.GITHUB_CLIENT_ID = original
 
@@ -933,10 +933,31 @@ def test_auth_login_with_repo_scope(client):
     original = srv.GITHUB_CLIENT_ID
     srv.GITHUB_CLIENT_ID = "test-client-id"
     try:
-        resp = client.get("/auth/login?repo=true", follow_redirects=False)
+        resp = client.get("/auth/login?scopes=repo,user:email", follow_redirects=False)
         assert resp.status_code in (302, 307)
         location = resp.headers["location"]
-        assert "repo" in location
+        from urllib.parse import urlparse, parse_qs
+        scope = parse_qs(urlparse(location).query)["scope"][0]
+        assert "repo" in scope.split()
+        assert "user:email" in scope.split()
+    finally:
+        srv.GITHUB_CLIENT_ID = original
+
+
+def test_auth_login_rejects_unknown_scopes(client):
+    import server.server as srv
+    original = srv.GITHUB_CLIENT_ID
+    srv.GITHUB_CLIENT_ID = "test-client-id"
+    try:
+        resp = client.get("/auth/login?scopes=admin:org,repo,delete_repo", follow_redirects=False)
+        assert resp.status_code in (302, 307)
+        location = resp.headers["location"]
+        from urllib.parse import urlparse, parse_qs
+        scope = parse_qs(urlparse(location).query)["scope"][0]
+        # Only 'repo' should survive the whitelist filter
+        assert scope == "repo"
+        assert "admin:org" not in scope
+        assert "delete_repo" not in scope
     finally:
         srv.GITHUB_CLIENT_ID = original
 

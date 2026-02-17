@@ -1009,13 +1009,13 @@ def require_auth(request) -> AuthUser:
 # ---------------------------------------------------------------------------
 
 @app.get("/auth/login")
-async def auth_login(repo: bool = False):
+async def auth_login(scopes: str = ""):
     if not GITHUB_CLIENT_ID:
         raise HTTPException(501, "GitHub OAuth not configured")
     state = secrets.token_urlsafe(16)
-    scope = "read:user user:email public_repo"
-    if repo:
-        scope += " repo"
+    ALLOWED_SCOPES = {"public_repo", "repo", "user:email"}
+    requested = {s.strip() for s in scopes.split(",") if s.strip()}
+    scope = " ".join(sorted(requested & ALLOWED_SCOPES))
     url = (
         f"https://github.com/login/oauth/authorize"
         f"?client_id={GITHUB_CLIENT_ID}"
@@ -1064,17 +1064,21 @@ async def auth_callback(request: Request, code: str = "", state: str = ""):
         user = user_resp.json()
 
         # Email may be private — fetch from /user/emails
+        # This can 403 if user:email scope wasn't granted; handle gracefully
         email = user.get("email", "") or ""
         if not email:
-            emails_resp = await client.get(
-                "https://api.github.com/user/emails",
-                headers={"Authorization": f"Bearer {gh_token}", "Accept": "application/json"},
-            )
-            if emails_resp.status_code == 200:
-                for e in emails_resp.json():
-                    if e.get("primary") and e.get("verified"):
-                        email = e.get("email", "")
-                        break
+            try:
+                emails_resp = await client.get(
+                    "https://api.github.com/user/emails",
+                    headers={"Authorization": f"Bearer {gh_token}", "Accept": "application/json"},
+                )
+                if emails_resp.status_code == 200:
+                    for e in emails_resp.json():
+                        if e.get("primary") and e.get("verified"):
+                            email = e.get("email", "")
+                            break
+            except Exception:
+                pass
 
     # Preserve existing api_keys from previous cookie
     existing_api_keys: dict[str, str] = {}
