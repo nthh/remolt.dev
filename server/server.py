@@ -880,8 +880,13 @@ async def warm_pool_loop() -> None:
             for _ in range(deficit):
                 try:
                     pool_id = secrets.token_hex(4)
+                    warm_env: dict[str, str] = {"TERM": "xterm-256color"}
+                    if agent.setup:
+                        warm_env["AGENT_SETUP"] = agent.setup
+                    if agent.welcome:
+                        warm_env["AGENT_WELCOME"] = agent.welcome
                     sandbox_id = await backend.create(
-                        f"warm-{pool_id}", {"TERM": "xterm-256color"},
+                        f"warm-{pool_id}", warm_env,
                         image=_agent_image(agent_id),
                     )
                     pool.put_nowait(sandbox_id)
