@@ -70,10 +70,11 @@ if [ -n "$AGENT_SETUP" ]; then
     eval "$AGENT_SETUP" || echo "Warning: agent setup command failed"
 fi
 
-# Welcome message — use AGENT_WELCOME if set, otherwise default
+# Welcome message — write to temp file to avoid backtick command substitution in .bashrc
 WELCOME_MSG="${AGENT_WELCOME:-Run \`claude\` to start an AI coding session.\nRun \`gh pr create\` to push your work.}"
+echo -e "$WELCOME_MSG" > /tmp/.remolt-welcome
 
-cat >> /home/dev/.bashrc << BASHRC
+cat >> /home/dev/.bashrc << 'BASHRC'
 
 # Remolt welcome (once per session)
 if [ ! -f /tmp/.remolt-welcomed ]; then
@@ -81,7 +82,9 @@ if [ ! -f /tmp/.remolt-welcomed ]; then
     echo ""
     echo -e "\033[1;36m  remolt.dev\033[0m — sandboxed AI coding"
     echo ""
-    echo -e "  ${WELCOME_MSG}"
+    if [ -f /tmp/.remolt-welcome ]; then
+        sed 's/^/  /' /tmp/.remolt-welcome
+    fi
     echo ""
     echo -e "  \033[2mHit a bug or have a feature request?"
     echo -e "  The remolt source is at ~/remolt-dev/"
