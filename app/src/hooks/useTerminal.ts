@@ -117,6 +117,19 @@ export function useTerminal(wsUrl: string | null, options: UseTerminalOptions = 
     }
     termRef.current = term;
 
+    // Handle OSC 52 clipboard sequences from tmux/programs inside the sandbox
+    term.parser.registerOscHandler(52, (data) => {
+      const idx = data.indexOf(';');
+      if (idx === -1) return true;
+      const b64 = data.slice(idx + 1);
+      if (b64 === '?' || !b64) return true;
+      try {
+        const text = atob(b64);
+        navigator.clipboard.writeText(text).catch(() => {});
+      } catch { /* ignore malformed base64 */ }
+      return true;
+    });
+
     // Auto-copy on text selection
     const selectionDisposable = term.onSelectionChange(() => {
       if (!copyOnSelectRef.current) return;

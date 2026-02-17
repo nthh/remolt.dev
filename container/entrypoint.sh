@@ -10,6 +10,8 @@ cat > /home/dev/.tmux.conf << 'TMUX'
 set -g mouse on
 set -g history-limit 10000
 set -g status off
+set -g set-clipboard on
+set -g allow-passthrough on
 bind-key PPage copy-mode -eu
 TMUX
 
