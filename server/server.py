@@ -154,9 +154,6 @@ def _agent_image(agent_id: str) -> str:
     override = os.getenv(env_key)
     if override:
         return override
-    # For claude-code, use SANDBOX_IMAGE for backwards compat
-    if agent_id == "claude-code":
-        return SANDBOX_IMAGE
     return f"ghcr.io/nthh/remolt-{agent_id}:latest"
 
 
