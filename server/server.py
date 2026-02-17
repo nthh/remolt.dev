@@ -826,11 +826,30 @@ async def warm_pool_loop() -> None:
         if check_counter % 6 == 0:
             try:
                 managed = await backend.list_managed()
+                # Collect all sandbox IDs tracked in queues
+                queued_ids: set[str] = set()
+                for pool in warm_pools.values():
+                    requeue = []
+                    while not pool.empty():
+                        try:
+                            requeue.append(pool.get_nowait())
+                        except asyncio.QueueEmpty:
+                            break
+                    queued_ids.update(requeue)
+                    for sbid in requeue:
+                        pool.put_nowait(sbid)
+
                 running_ids = set()
                 for sb in managed:
                     sid = sb.get("session_id", "")
-                    if sid.startswith("warm-") and not sb["running"]:
-                        logger.info(f"Warm pool: destroying errored pod {sb['id']}")
+                    if not sid.startswith("warm-"):
+                        if sb["running"]:
+                            running_ids.add(sb["id"])
+                        continue
+                    # Warm pod: destroy if errored OR orphaned (not in any queue)
+                    if not sb["running"] or sb["id"] not in queued_ids:
+                        reason = "errored" if not sb["running"] else "orphaned"
+                        logger.info(f"Warm pool: destroying {reason} pod {sb['id']}")
                         await backend.destroy(sb["id"])
                     elif sb["running"]:
                         running_ids.add(sb["id"])
