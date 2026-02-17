@@ -435,7 +435,8 @@ class DockerBackend(SandboxBackend):
             f"echo {shlex.quote(chr(10).join(secret_lines))} > /dev/shm/.env",
             "chmod 600 /dev/shm/.env",
             "echo 'if [ -f /dev/shm/.env ]; then source /dev/shm/.env; rm -f /dev/shm/.env; fi' >> /home/dev/.bashrc",
-            "source /home/dev/.bashrc",
+            # Eval env vars directly (don't source .bashrc — it would consume /dev/shm/.env)
+            f"eval {shlex.quote(chr(10).join(safe_lines + secret_lines))}",
             'git config --global user.name "${GIT_USER_NAME:-Claude Dev}"',
             'git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"',
             'if [ -n "$REPO_URL" ]; then git clone "$REPO_URL" /home/dev/workspace 2>/dev/null || true; fi',
@@ -681,7 +682,7 @@ class K8sBackend(SandboxBackend):
             f" && echo {shlex.quote(secret_lines)} > /dev/shm/.env"
             " && chmod 600 /dev/shm/.env"
             """ && echo 'if [ -f /dev/shm/.env ]; then source /dev/shm/.env; rm -f /dev/shm/.env; fi' >> /home/dev/.bashrc"""
-            " && source /home/dev/.bashrc"
+            f" && eval {shlex.quote((safe_lines + chr(10) + secret_lines).strip())}"
             ' && git config --global user.name "${GIT_USER_NAME:-Claude Dev}"'
             ' && git config --global user.email "${GIT_USER_EMAIL:-dev@remolt.dev}"'
             ' && if [ -n "$REPO_URL" ]; then git clone "$REPO_URL" /home/dev/workspace 2>/dev/null || true; fi'
