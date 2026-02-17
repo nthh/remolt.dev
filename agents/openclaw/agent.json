@@ -17,5 +17,5 @@
     { "key": "OPENROUTER_API_KEY", "label": "OpenRouter API Key", "secret": true, "required": false }
   ],
   "welcome": "Starting OpenClaw setup wizard...\nComplete the onboard wizard, then switch to the Dashboard tab.",
-  "warm_pool": false
+  "warm_pool": true
 }

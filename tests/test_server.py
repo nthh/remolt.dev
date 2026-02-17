@@ -181,10 +181,10 @@ def test_agent_ports():
 
 
 def test_agent_warm_pool_flag():
-    """Claude Code has warm_pool=true, OpenClaw has warm_pool=false."""
+    """Both Claude Code and OpenClaw have warm_pool=true."""
     import server.server as srv
     assert srv.AGENTS["claude-code"].warm_pool is True
-    assert srv.AGENTS["openclaw"].warm_pool is False
+    assert srv.AGENTS["openclaw"].warm_pool is True
 
 
 # ---------------------------------------------------------------------------
@@ -527,15 +527,15 @@ async def test_claim_warm_sandbox(fake_backend):
     import server.server as srv
     srv.backend = fake_backend
 
-    # Pre-populate warm pool
+    # Pre-populate warm pool for claude-code
     sandbox_id = await fake_backend.create("warm-test", {"TERM": "xterm-256color"})
-    srv.warm_pool.put_nowait(sandbox_id)
-    assert srv.warm_pool.qsize() == 1
+    srv._warm_pool("claude-code").put_nowait(sandbox_id)
+    assert srv._warm_pool("claude-code").qsize() == 1
 
     # Claim it
-    claimed = await srv.claim_warm_sandbox("test-session", {"REPO_URL": "https://github.com/test/repo"})
+    claimed = await srv.claim_warm_sandbox("claude-code", "test-session", {"REPO_URL": "https://github.com/test/repo"})
     assert claimed == sandbox_id
-    assert srv.warm_pool.qsize() == 0
+    assert srv._warm_pool("claude-code").qsize() == 0
     # Env should have been injected
     sb = fake_backend.sandboxes[sandbox_id]
     assert sb["env"]["REPO_URL"] == "https://github.com/test/repo"
@@ -548,10 +548,11 @@ async def test_claim_warm_sandbox_empty(fake_backend):
     srv.backend = fake_backend
 
     # Empty pool
-    while not srv.warm_pool.empty():
-        srv.warm_pool.get_nowait()
+    pool = srv._warm_pool("claude-code")
+    while not pool.empty():
+        pool.get_nowait()
 
-    result = await srv.claim_warm_sandbox("test-session", {"TERM": "xterm-256color"})
+    result = await srv.claim_warm_sandbox("claude-code", "test-session", {"TERM": "xterm-256color"})
     assert result is None
 
 
@@ -563,16 +564,16 @@ async def test_claim_warm_sandbox_dead_pod_returns_none(fake_backend):
 
     # Create a warm pod then make inject_env fail (simulating dead pod)
     sandbox_id = await fake_backend.create("warm-dead", {"TERM": "xterm-256color"})
-    srv.warm_pool.put_nowait(sandbox_id)
+    srv._warm_pool("claude-code").put_nowait(sandbox_id)
 
     original_inject = fake_backend.inject_env
     async def fail_inject(sid, env):
         raise RuntimeError("pod is dead")
     fake_backend.inject_env = fail_inject
 
-    result = await srv.claim_warm_sandbox("test-session", {"TERM": "xterm-256color"})
+    result = await srv.claim_warm_sandbox("claude-code", "test-session", {"TERM": "xterm-256color"})
     assert result is None
-    assert srv.warm_pool.qsize() == 0
+    assert srv._warm_pool("claude-code").qsize() == 0
     # Dead pod should have been destroyed
     assert sandbox_id not in fake_backend.sandboxes
 
@@ -588,12 +589,11 @@ async def test_claim_dead_warm_pod_falls_through_to_cold_start(fake_backend):
     original_auth = srv.AUTH_REQUIRED
     srv.AUTH_REQUIRED = False
 
+    original_inject = fake_backend.inject_env
     try:
         # Create a warm pod then make inject_env fail for that pod only
         warm_id = await fake_backend.create("warm-dead", {"TERM": "xterm-256color"})
-        srv.warm_pool.put_nowait(warm_id)
-
-        original_inject = fake_backend.inject_env
+        srv._warm_pool("claude-code").put_nowait(warm_id)
         call_count = 0
         async def fail_first_inject(sid, env):
             nonlocal call_count
@@ -622,8 +622,8 @@ async def test_warm_pool_loop_cleans_errored_pods(fake_backend):
     srv.backend = fake_backend
 
     # Drain existing queue
-    while not srv.warm_pool.empty():
-        srv.warm_pool.get_nowait()
+    while not srv._warm_pool("claude-code").empty():
+        srv._warm_pool("claude-code").get_nowait()
 
     # Simulate an errored warm pod in K8s (not running)
     fake_backend.sandboxes["remolt-warm-dead1"] = {
@@ -632,7 +632,7 @@ async def test_warm_pool_loop_cleans_errored_pods(fake_backend):
         "running": False,
     }
     # Put a stale entry in the queue pointing to a non-existent pod
-    srv.warm_pool.put_nowait("remolt-warm-gone")
+    srv._warm_pool("claude-code").put_nowait("remolt-warm-gone")
 
     # Run warm_pool_loop for one health-check iteration (counter % 6 == 0)
     # We patch asyncio.sleep to break after one iteration and set counter to 5
@@ -660,20 +660,20 @@ async def test_warm_pool_loop_cleans_errored_pods(fake_backend):
 
         # Purge stale queue entries
         requeue = []
-        while not srv.warm_pool.empty():
+        while not srv._warm_pool("claude-code").empty():
             try:
-                sbid = srv.warm_pool.get_nowait()
+                sbid = srv._warm_pool("claude-code").get_nowait()
                 if sbid in running_ids:
                     requeue.append(sbid)
             except asyncio.QueueEmpty:
                 break
         for sbid in requeue:
-            srv.warm_pool.put_nowait(sbid)
+            srv._warm_pool("claude-code").put_nowait(sbid)
 
         # Errored pod should be destroyed
         assert "remolt-warm-dead1" not in fake_backend.sandboxes
         # Stale queue entry should be purged
-        assert srv.warm_pool.qsize() == 0
+        assert srv._warm_pool("claude-code").qsize() == 0
     finally:
         srv.WARM_POOL_SIZE = original_pool_size
 
@@ -685,12 +685,12 @@ async def test_warm_pool_loop_keeps_healthy_entries(fake_backend):
     srv.backend = fake_backend
 
     # Drain existing queue
-    while not srv.warm_pool.empty():
-        srv.warm_pool.get_nowait()
+    while not srv._warm_pool("claude-code").empty():
+        srv._warm_pool("claude-code").get_nowait()
 
     # Create a healthy warm pod
     sandbox_id = await fake_backend.create("warm-healthy", {"TERM": "xterm-256color"})
-    srv.warm_pool.put_nowait(sandbox_id)
+    srv._warm_pool("claude-code").put_nowait(sandbox_id)
 
     # Run the health check logic
     managed = await fake_backend.list_managed()
@@ -703,23 +703,23 @@ async def test_warm_pool_loop_keeps_healthy_entries(fake_backend):
             running_ids.add(sb["id"])
 
     requeue = []
-    while not srv.warm_pool.empty():
+    while not srv._warm_pool("claude-code").empty():
         try:
-            sbid = srv.warm_pool.get_nowait()
+            sbid = srv._warm_pool("claude-code").get_nowait()
             if sbid in running_ids:
                 requeue.append(sbid)
         except asyncio.QueueEmpty:
             break
     for sbid in requeue:
-        srv.warm_pool.put_nowait(sbid)
+        srv._warm_pool("claude-code").put_nowait(sbid)
 
     # Healthy pod should still be in pool
-    assert srv.warm_pool.qsize() == 1
+    assert srv._warm_pool("claude-code").qsize() == 1
     assert sandbox_id in fake_backend.sandboxes
 
     # Clean up shared state
-    while not srv.warm_pool.empty():
-        srv.warm_pool.get_nowait()
+    while not srv._warm_pool("claude-code").empty():
+        srv._warm_pool("claude-code").get_nowait()
 
 
 @pytest.mark.asyncio
@@ -734,7 +734,7 @@ async def test_create_session_uses_warm_pool(fake_backend):
     try:
         # Pre-populate warm pool
         sandbox_id = await fake_backend.create("warm-pool-1", {"TERM": "xterm-256color"})
-        srv.warm_pool.put_nowait(sandbox_id)
+        srv._warm_pool("claude-code").put_nowait(sandbox_id)
 
         initial_count = len(fake_backend.sandboxes)
 
@@ -746,7 +746,7 @@ async def test_create_session_uses_warm_pool(fake_backend):
 
         # Should have claimed from pool, not created a new one
         assert len(fake_backend.sandboxes) == initial_count
-        assert srv.warm_pool.qsize() == 0
+        assert srv._warm_pool("claude-code").qsize() == 0
     finally:
         srv.AUTH_REQUIRED = original_auth
 
@@ -762,8 +762,8 @@ async def test_create_session_falls_back_to_cold_start(fake_backend):
 
     try:
         # Ensure pool is empty
-        while not srv.warm_pool.empty():
-            srv.warm_pool.get_nowait()
+        while not srv._warm_pool("claude-code").empty():
+            srv._warm_pool("claude-code").get_nowait()
 
         from fastapi.testclient import TestClient
         client = TestClient(srv.app, raise_server_exceptions=False)
@@ -776,8 +776,8 @@ async def test_create_session_falls_back_to_cold_start(fake_backend):
 
 
 @pytest.mark.asyncio
-async def test_warm_pool_skipped_for_openclaw(fake_backend):
-    """Non-warm-pool agents always cold-start, even when pool has sandboxes."""
+async def test_warm_pool_per_agent_isolation(fake_backend):
+    """Agents only claim from their own warm pool, not other agents'."""
     import server.server as srv
     srv.backend = fake_backend
     srv.sessions.clear()
@@ -787,21 +787,21 @@ async def test_warm_pool_skipped_for_openclaw(fake_backend):
     try:
         # Pre-populate warm pool
         sandbox_id = await fake_backend.create("warm-pool-1", {"TERM": "xterm-256color"})
-        srv.warm_pool.put_nowait(sandbox_id)
-        initial_pool_size = srv.warm_pool.qsize()
+        srv._warm_pool("claude-code").put_nowait(sandbox_id)
+        initial_pool_size = srv._warm_pool("claude-code").qsize()
 
         from fastapi.testclient import TestClient
         client = TestClient(srv.app, raise_server_exceptions=False)
         resp = client.post("/api/sessions", json={"agent_type": "openclaw"})
         assert resp.status_code == 200
-        # Warm pool should NOT be consumed for openclaw
-        assert srv.warm_pool.qsize() == initial_pool_size
-        # Should have created a new sandbox (2 total: warm + openclaw)
+        # Claude-code pool should NOT be consumed for openclaw
+        assert srv._warm_pool("claude-code").qsize() == initial_pool_size
+        # Openclaw pool was empty, so it cold-started (2 total: warm claude + new openclaw)
         assert len(fake_backend.sandboxes) == 2
     finally:
         srv.AUTH_REQUIRED = original_auth
-        while not srv.warm_pool.empty():
-            srv.warm_pool.get_nowait()
+        while not srv._warm_pool("claude-code").empty():
+            srv._warm_pool("claude-code").get_nowait()
 
 
 # ---------------------------------------------------------------------------

@@ -237,7 +237,7 @@ class Session:
 
 
 sessions: dict[str, Session] = {}
-warm_pool: asyncio.Queue[str] = asyncio.Queue()  # sandbox_ids ready to claim
+warm_pools: dict[str, asyncio.Queue[str]] = {}  # agent_id -> sandbox_ids ready to claim
 
 # ---------------------------------------------------------------------------
 # Sandbox backend protocol
@@ -805,8 +805,15 @@ async def cleanup_loop() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _warm_pool(agent_id: str) -> asyncio.Queue[str]:
+    """Get or create the warm pool queue for an agent."""
+    if agent_id not in warm_pools:
+        warm_pools[agent_id] = asyncio.Queue()
+    return warm_pools[agent_id]
+
+
 async def warm_pool_loop() -> None:
-    """Keep WARM_POOL_SIZE idle sandboxes ready for instant session creation."""
+    """Keep WARM_POOL_SIZE idle sandboxes ready per warm-pool-eligible agent."""
     if WARM_POOL_SIZE <= 0:
         return
     check_counter = 0
@@ -827,52 +834,58 @@ async def warm_pool_loop() -> None:
                         running_ids.add(sb["id"])
 
                 # Purge queue entries pointing to dead pods
-                requeue = []
-                while not warm_pool.empty():
-                    try:
-                        sbid = warm_pool.get_nowait()
-                        if sbid in running_ids:
-                            requeue.append(sbid)
-                        else:
-                            logger.info(f"Warm pool: dropping stale queue entry {sbid}")
-                    except asyncio.QueueEmpty:
-                        break
-                for sbid in requeue:
-                    warm_pool.put_nowait(sbid)
+                for agent_id, pool in warm_pools.items():
+                    requeue = []
+                    while not pool.empty():
+                        try:
+                            sbid = pool.get_nowait()
+                            if sbid in running_ids:
+                                requeue.append(sbid)
+                            else:
+                                logger.info(f"Warm pool [{agent_id}]: dropping stale queue entry {sbid}")
+                        except asyncio.QueueEmpty:
+                            break
+                    for sbid in requeue:
+                        pool.put_nowait(sbid)
             except Exception as e:
                 logger.warning(f"Warm pool health check failed: {e}")
 
-        # Only warm-pool agents that have warm_pool=true (default: claude-code)
-        warm_agent = AGENTS.get("claude-code")
-        warm_image = _agent_image("claude-code") if warm_agent else SANDBOX_IMAGE
-        deficit = WARM_POOL_SIZE - warm_pool.qsize()
-        for _ in range(deficit):
-            try:
-                pool_id = secrets.token_hex(4)
-                sandbox_id = await backend.create(
-                    f"warm-{pool_id}", {"TERM": "xterm-256color"},
-                    image=warm_image,
-                )
-                warm_pool.put_nowait(sandbox_id)
-                logger.info(f"Warm pool: created {sandbox_id} (pool size: {warm_pool.qsize()})")
-                emit("warm_pool.created", sandbox_id=sandbox_id, pool_size=warm_pool.qsize())
-            except Exception as e:
-                logger.warning(f"Warm pool: failed to create sandbox: {e}")
-                break
+        # Fill warm pools for all agents with warm_pool=true
+        for agent_id, agent in AGENTS.items():
+            if not agent.warm_pool:
+                continue
+            pool = _warm_pool(agent_id)
+            deficit = WARM_POOL_SIZE - pool.qsize()
+            for _ in range(deficit):
+                try:
+                    pool_id = secrets.token_hex(4)
+                    sandbox_id = await backend.create(
+                        f"warm-{pool_id}", {"TERM": "xterm-256color"},
+                        image=_agent_image(agent_id),
+                    )
+                    pool.put_nowait(sandbox_id)
+                    logger.info(f"Warm pool [{agent_id}]: created {sandbox_id} (pool size: {pool.qsize()})")
+                    emit("warm_pool.created", sandbox_id=sandbox_id, agent=agent_id, pool_size=pool.qsize())
+                except Exception as e:
+                    logger.warning(f"Warm pool [{agent_id}]: failed to create sandbox: {e}")
+                    break
         await asyncio.sleep(5)
 
 
-async def claim_warm_sandbox(session_id: str, env: dict[str, str]) -> str | None:
+async def claim_warm_sandbox(agent_id: str, session_id: str, env: dict[str, str]) -> str | None:
     """Try to claim a pre-warmed sandbox. Returns sandbox_id or None."""
+    pool = warm_pools.get(agent_id)
+    if not pool:
+        return None
     try:
-        sandbox_id = warm_pool.get_nowait()
+        sandbox_id = pool.get_nowait()
     except asyncio.QueueEmpty:
         return None
     try:
         await backend.inject_env(sandbox_id, env)
         await backend.relabel(sandbox_id, session_id)
-        logger.info(f"Claimed warm sandbox {sandbox_id} (pool size: {warm_pool.qsize()})")
-        emit("warm_pool.claimed", sandbox_id=sandbox_id, pool_size=warm_pool.qsize())
+        logger.info(f"Claimed warm sandbox {sandbox_id} [{agent_id}] (pool size: {pool.qsize()})")
+        emit("warm_pool.claimed", sandbox_id=sandbox_id, agent=agent_id, pool_size=pool.qsize())
         return sandbox_id
     except Exception as e:
         logger.warning(f"Warm sandbox {sandbox_id} unusable, destroying: {e}")
@@ -910,12 +923,13 @@ async def lifespan(app: FastAPI):
     # Drain warm pool (unused pre-warmed pods) but keep session pods alive
     # for recovery after restart. Session pods have remolt.session-id labels
     # and will be reclaimed by recover_sessions() on next startup.
-    while not warm_pool.empty():
-        try:
-            sandbox_id = warm_pool.get_nowait()
-            await backend.destroy(sandbox_id)
-        except Exception:
-            pass
+    for pool in warm_pools.values():
+        while not pool.empty():
+            try:
+                sandbox_id = pool.get_nowait()
+                await backend.destroy(sandbox_id)
+            except Exception:
+                pass
     save_sessions()
     await backend.close()
     emit("server.stopped", preserved_sessions=len(sessions))
@@ -1273,7 +1287,7 @@ async def api_create_session(request: Request, body: CreateSessionReq):
         # Only use warm pool for warm-pool-eligible agents
         sandbox_id = None
         if agent.warm_pool:
-            sandbox_id = await claim_warm_sandbox(sid, env)
+            sandbox_id = await claim_warm_sandbox(agent_type, sid, env)
         if not sandbox_id:
             # Cold start: create with safe env only, then inject secrets via exec
             sandbox_id = await backend.create(
