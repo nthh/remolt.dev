@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 
@@ -109,6 +110,11 @@ export function useTerminal(wsUrl: string | null, options: UseTerminalOptions = 
     });
 
     term.open(containerRef.current);
+    try {
+      term.loadAddon(new WebglAddon());
+    } catch {
+      // WebGL not available — fall back to DOM renderer
+    }
     termRef.current = term;
 
     // Auto-copy on text selection
