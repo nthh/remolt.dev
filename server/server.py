@@ -598,6 +598,8 @@ class K8sBackend(SandboxBackend):
             r = await self._client.get(
                 f"/api/v1/namespaces/{self._namespace}/pods/{pod_name}"
             )
+            if r.status_code == 404:
+                raise RuntimeError(f"Pod {pod_name} disappeared")
             if r.status_code == 200:
                 phase = r.json().get("status", {}).get("phase", "")
                 if phase == "Running":

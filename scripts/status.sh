@@ -2,6 +2,7 @@
 # remolt status — quick overview of the cluster state
 set -uo pipefail
 
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/remolt-config}"
 NS="${REMOLT_NAMESPACE:-remolt}"
 BOLD='\033[1m'
 DIM='\033[2m'
