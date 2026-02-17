@@ -18,7 +18,7 @@ Sandbox Container/Pod (Ubuntu 24.04 + tmux + agent CLI + git + gh)
 ```
 
 1. User signs in with GitHub (OAuth — optional for local dev, required in production)
-2. User selects an agent (Claude Code, OpenClaw, etc.) and optionally enters a repo URL
+2. User selects an agent (Claude Code, OpenClaw, etc.)
 3. Server creates a sandbox with the agent's container image
 4. GitHub token + agent-specific env vars injected into sandbox
 5. Browser connects via WebSocket to a tmux session inside the sandbox
@@ -99,7 +99,7 @@ Three mechanisms make sessions durable:
 | Session ID | `localStorage` (`remolt:session`) | Until session ends |
 | Preferences | `localStorage` (`remolt:prefs`) | Indefinite |
 
-Preferences include repo URL, git name, and git email — convenience fields so you don't re-type them.
+Preferences include git name, git email, and selected agent — convenience fields so you don't re-type them.
 
 ### Analytics Events
 
@@ -182,7 +182,7 @@ When GitHub OAuth is configured, your token is automatically injected into the s
 
 - `git push` works immediately — no manual auth needed
 - `gh` CLI works out of the box — create PRs, browse issues, manage releases
-- Private repos accessible — provide a repo URL in the launch form to auto-clone into `/home/dev/workspace`
+- Private repos accessible — clone any repo you have access to inside the sandbox
 
 Without OAuth (local dev), run `gh auth login` in the terminal to authenticate via browser device flow.
 
@@ -336,8 +336,14 @@ remolt-dev/
 │       ├── contexts/SessionContext.tsx  # REST API, agent list, localStorage
 │       ├── hooks/useTerminal.ts        # xterm.js + WebSocket + auto-reconnect
 │       └── components/
-│           ├── SetupForm.tsx           # Agent selector + credentials form
-│           └── TerminalView.tsx        # Terminal + dashboard button
+│           ├── SetupForm.tsx           # Agent selector + API keys form
+│           ├── WorkspaceView.tsx       # Tab management, upload/download
+│           ├── TabBar.tsx              # Terminal tabs + action buttons
+│           ├── TerminalPanel.tsx       # Terminal instance + toolbar
+│           ├── DashboardPanel.tsx      # Agent dashboard iframe
+│           ├── LogsPanel.tsx           # Agent log streaming
+│           ├── VSCodePanel.tsx         # VS Code (code-server) iframe
+│           └── SettingsModal.tsx       # API key management modal
 └── k8s/
     ├── namespace.yaml
     ├── network-policy.yaml # Deny sandbox-to-sandbox traffic
@@ -353,12 +359,19 @@ remolt-dev/
 | `GET` | `/auth/login` | Redirect to GitHub OAuth |
 | `GET` | `/auth/callback` | OAuth callback (sets auth cookie) |
 | `GET` | `/auth/me` | Current user info (or 401) |
-| `POST` | `/auth/logout` | Clear auth cookie |
+| `GET` | `/auth/logout` | Clear auth cookie |
 | `GET` | `/api/agents` | List available agents |
+| `GET` | `/api/keys` | List stored API key names |
+| `PUT` | `/api/keys` | Store API keys (encrypted, per-user) |
+| `DELETE` | `/api/keys/{name}` | Delete a stored API key |
 | `POST` | `/api/sessions` | Create session → `{session_id, ws_url, agent_type, proxy_url}` |
 | `GET` | `/api/sessions/{id}` | Check if session is alive |
 | `DELETE` | `/api/sessions/{id}` | Destroy session + container |
+| `GET` | `/api/sessions/{id}/download` | Download workspace as `.tar.gz` |
+| `POST` | `/api/sessions/{id}/upload` | Upload `.tar.gz` to restore workspace |
 | `WS` | `/ws/terminal/{id}` | Terminal (binary TTY + JSON resize control) |
+| `WS` | `/ws/logs/{id}` | Streaming agent logs |
+| `WS` | `/vscode/{id}/{path}` | VS Code (code-server) proxy |
 | `GET/WS` | `/proxy/{id}/{path}` | HTTP + WebSocket proxy to agent dashboard |
 | `GET` | `/*` | SPA static files with fallback to `index.html` |
 
