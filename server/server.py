@@ -40,6 +40,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
+from starlette.responses import StreamingResponse
 
 # ---------------------------------------------------------------------------
 # Config
@@ -284,11 +285,12 @@ class SandboxBackend(abc.ABC):
         """List managed sandboxes. Returns [{id, session_id, running}]."""
 
     @abc.abstractmethod
-    async def exec_attach(self, sandbox_id: str, *, window: int = 0, cmd: str | None = None) -> ExecStream:
+    async def exec_attach(self, sandbox_id: str, *, window: int = 0, cmd: str | None = None, tty: bool = True) -> ExecStream:
         """Attach to sandbox with TTY. Returns an ExecStream.
 
         window: tmux session index (0=main, N=main-N)
         cmd: custom command to run instead of tmux (e.g. tail -f for logs)
+        tty: allocate a TTY (False for binary-clean output like tar)
         """
 
     @abc.abstractmethod
@@ -401,20 +403,21 @@ class DockerBackend(SandboxBackend):
             })
         return result
 
-    async def exec_attach(self, sandbox_id: str, *, window: int = 0, cmd: str | None = None) -> ExecStream:
+    async def exec_attach(self, sandbox_id: str, *, window: int = 0, cmd: str | None = None, tty: bool = True) -> ExecStream:
         container = self._docker.containers.container(sandbox_id)
         if cmd:
             shell_cmd = cmd
         else:
             session_name = "main" if window == 0 else f"main-{window}"
             shell_cmd = f"tmux new-session -As {session_name}"
+        env = {"TERM": "xterm-256color", "COLUMNS": "120", "LINES": "30"} if tty else {}
         exec_inst = await container.exec(
             cmd=["bash", "-lc", shell_cmd],
             stdin=True,
             stdout=True,
             stderr=True,
-            tty=True,
-            environment={"TERM": "xterm-256color", "COLUMNS": "120", "LINES": "30"},
+            tty=tty,
+            environment=env,
         )
         exec_id = exec_inst._id
         stream = exec_inst.start(detach=False)
@@ -638,7 +641,7 @@ class K8sBackend(SandboxBackend):
             })
         return result
 
-    async def exec_attach(self, sandbox_id: str, *, window: int = 0, cmd: str | None = None) -> ExecStream:
+    async def exec_attach(self, sandbox_id: str, *, window: int = 0, cmd: str | None = None, tty: bool = True) -> ExecStream:
         import websockets
         from urllib.parse import quote
 
@@ -649,9 +652,10 @@ class K8sBackend(SandboxBackend):
             shell_cmd = f"tmux new-session -As {session_name}"
 
         # Build exec URL
+        tty_param = "true" if tty else "false"
         params = (
             f"command=bash&command=-lc&command={quote(shell_cmd)}"
-            "&stdin=true&stdout=true&stderr=true&tty=true"
+            f"&stdin=true&stdout=true&stderr=true&tty={tty_param}"
         )
         url = (
             f"wss://kubernetes.default.svc"
@@ -1337,6 +1341,39 @@ async def api_delete_session(request: Request, session_id: str):
     emit("session.ended", session_id=session_id, reason="user", duration_s=round(duration))
     save_sessions()
     return {"status": "terminated", "session_id": session_id}
+
+
+@app.get("/api/sessions/{session_id}/download")
+async def api_download_workspace(request: Request, session_id: str):
+    user = require_auth(request)
+    s = sessions.get(session_id)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    if AUTH_REQUIRED and s.owner and s.owner != user.login:
+        raise HTTPException(403, "Not authorized")
+    if s.status != Status.RUNNING:
+        raise HTTPException(400, "Session is not running")
+
+    assert backend is not None
+    tar_cmd = "tar czf - -C /home/dev workspace .openclaw 2>/dev/null"
+    stream = await backend.exec_attach(s.sandbox_id, cmd=tar_cmd, tty=False)
+
+    async def generate():
+        try:
+            while True:
+                data = await stream.read()
+                if data is None:
+                    break
+                if data:
+                    yield data
+        finally:
+            await stream.close()
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/gzip",
+        headers={"Content-Disposition": "attachment; filename=remolt-workspace.tar.gz"},
+    )
 
 
 # ---------------------------------------------------------------------------

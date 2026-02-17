@@ -66,6 +66,27 @@ export function WorkspaceView({ onOpenSettings }: { onOpenSettings: () => void }
     return `/vscode/${session.session_id}/`;
   }, [session]);
 
+  const downloadWorkspace = useCallback(async () => {
+    if (!session) return;
+    try {
+      const resp = await fetch(`/api/sessions/${session.session_id}/download`, {
+        credentials: 'include',
+      });
+      if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'remolt-workspace.tar.gz';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Download failed:', err);
+    }
+  }, [session]);
+
   const serviceTabs: Tab[] = useMemo(() => {
     const tabs: Tab[] = [];
     if (hasDashboard) {
@@ -88,6 +109,7 @@ export function WorkspaceView({ onOpenSettings }: { onOpenSettings: () => void }
         canAddTerminal={terminalTabs.length < MAX_TERMINALS}
         onEndSession={destroySession}
         onOpenSettings={onOpenSettings}
+        onDownload={downloadWorkspace}
       />
       <div className="workspace-content">
         {terminalTabs.map(tab => (

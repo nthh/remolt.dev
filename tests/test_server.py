@@ -78,7 +78,7 @@ class FakeBackend:
             for sid, sb in self.sandboxes.items()
         ]
 
-    async def exec_attach(self, sandbox_id: str, *, window: int = 0, cmd: str | None = None) -> FakeExecStream:
+    async def exec_attach(self, sandbox_id: str, *, window: int = 0, cmd: str | None = None, tty: bool = True) -> FakeExecStream:
         stream = FakeExecStream()
         key = f"{sandbox_id}:w{window}" if cmd is None else f"{sandbox_id}:cmd"
         self.streams[key] = stream
@@ -1700,4 +1700,82 @@ def test_vscode_proxy_rejects_wrong_user(auth_client, fake_backend):
     auth_client.cookies.clear()
     auth_client.cookies.set("remolt_auth", _make_auth_cookie(login="user2"))
     resp = auth_client.get(f"/vscode/{sid}/")
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Download endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def test_download_workspace(client, fake_backend):
+    """GET /api/sessions/{id}/download streams tar output."""
+    resp = client.post("/api/sessions", json={})
+    sid = resp.json()["session_id"]
+
+    # Pre-populate the exec stream with fake tar data
+    import server.server as srv
+    s = srv.sessions[sid]
+    stream = FakeExecStream()
+    stream.push(b"\x1f\x8b fake tar data")
+    stream.end()
+
+    original = fake_backend.exec_attach
+    async def patched_exec(sandbox_id, *, window=0, cmd=None, tty=True):
+        if cmd and "tar" in cmd and not tty:
+            return stream
+        return await original(sandbox_id, window=window, cmd=cmd, tty=tty)
+    fake_backend.exec_attach = patched_exec
+
+    try:
+        resp = client.get(f"/api/sessions/{sid}/download")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/gzip"
+        assert "remolt-workspace.tar.gz" in resp.headers["content-disposition"]
+        assert resp.content == b"\x1f\x8b fake tar data"
+    finally:
+        fake_backend.exec_attach = original
+
+
+def test_download_requires_running_session(client, fake_backend):
+    """Download endpoint rejects non-running sessions."""
+    import server.server as srv
+    resp = client.post("/api/sessions", json={})
+    sid = resp.json()["session_id"]
+    srv.sessions[sid].status = srv.Status.TERMINATED
+    resp = client.get(f"/api/sessions/{sid}/download")
+    assert resp.status_code == 400
+
+
+def test_download_404_nonexistent(client):
+    """Download endpoint returns 404 for non-existent session."""
+    resp = client.get("/api/sessions/nonexistent/download")
+    assert resp.status_code == 404
+
+
+def test_download_requires_auth(fake_backend):
+    """Download endpoint requires auth when AUTH_REQUIRED=True."""
+    import server.server as srv
+    srv.backend = fake_backend
+    srv.sessions.clear()
+    original = srv.AUTH_REQUIRED
+    srv.AUTH_REQUIRED = True
+    try:
+        client = TestClient(srv.app, raise_server_exceptions=False)
+        resp = client.get("/api/sessions/nonexistent/download")
+        assert resp.status_code == 401
+    finally:
+        srv.AUTH_REQUIRED = original
+
+
+def test_download_rejects_wrong_user(auth_client, fake_backend):
+    """Download endpoint returns 403 for non-owner."""
+    cookie = _make_auth_cookie(login="user1")
+    auth_client.cookies.set("remolt_auth", cookie)
+    resp = auth_client.post("/api/sessions", json={})
+    sid = resp.json()["session_id"]
+
+    auth_client.cookies.clear()
+    auth_client.cookies.set("remolt_auth", _make_auth_cookie(login="user2"))
+    resp = auth_client.get(f"/api/sessions/{sid}/download")
     assert resp.status_code == 403
