@@ -1380,6 +1380,29 @@ async def api_download_workspace(request: Request, session_id: str):
     )
 
 
+@app.post("/api/sessions/{session_id}/upload")
+async def api_upload_workspace(request: Request, session_id: str):
+    user = require_auth(request)
+    s = sessions.get(session_id)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    if AUTH_REQUIRED and s.owner and s.owner != user.login:
+        raise HTTPException(403, "Not authorized")
+    if s.status != Status.RUNNING:
+        raise HTTPException(400, "Session is not running")
+
+    assert backend is not None
+    stream = await backend.exec_attach(
+        s.sandbox_id, cmd="tar xzf - -C /home/dev", tty=False
+    )
+    try:
+        async for chunk in request.stream():
+            await stream.write(chunk)
+    finally:
+        await stream.close()
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------------------
 # Agent list endpoint
 # ---------------------------------------------------------------------------

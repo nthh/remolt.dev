@@ -16,6 +16,7 @@ interface TabBarProps {
   onEndSession: () => void;
   onOpenSettings?: () => void;
   onDownload?: () => void;
+  onUpload?: () => void;
 }
 
 export function TabBar({
@@ -29,6 +30,7 @@ export function TabBar({
   onEndSession,
   onOpenSettings,
   onDownload,
+  onUpload,
 }: TabBarProps) {
   return (
     <div className="workspace-tabbar">
@@ -74,6 +76,15 @@ export function TabBar({
       </div>
       <div className="tabbar-end">
         <span className="version-tag">{__APP_VERSION__}</span>
+        {onUpload && (
+          <button className="btn btn-icon" onClick={onUpload} data-tooltip="Upload workspace">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+          </button>
+        )}
         {onDownload && (
           <button className="btn btn-icon" onClick={onDownload} data-tooltip="Download workspace">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

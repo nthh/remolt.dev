@@ -87,6 +87,34 @@ export function WorkspaceView({ onOpenSettings }: { onOpenSettings: () => void }
     }
   }, [session]);
 
+  const [uploading, setUploading] = useState(false);
+
+  const uploadWorkspace = useCallback(() => {
+    if (!session || uploading) return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.tar.gz,.tgz';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setUploading(true);
+      try {
+        const resp = await fetch(`/api/sessions/${session.session_id}/upload`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/gzip' },
+          body: file,
+        });
+        if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
+      } catch (err) {
+        console.error('Upload failed:', err);
+      } finally {
+        setUploading(false);
+      }
+    };
+    input.click();
+  }, [session, uploading]);
+
   const serviceTabs: Tab[] = useMemo(() => {
     const tabs: Tab[] = [];
     if (hasDashboard) {
@@ -110,6 +138,7 @@ export function WorkspaceView({ onOpenSettings }: { onOpenSettings: () => void }
         onEndSession={destroySession}
         onOpenSettings={onOpenSettings}
         onDownload={downloadWorkspace}
+        onUpload={uploading ? undefined : uploadWorkspace}
       />
       <div className="workspace-content">
         {terminalTabs.map(tab => (
