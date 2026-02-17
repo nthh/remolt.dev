@@ -77,7 +77,8 @@ export function WorkspaceView({ onOpenSettings }: { onOpenSettings: () => void }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'remolt-workspace.tar.gz';
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.download = `remolt-workspace-${ts}.tar.gz`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -93,7 +94,7 @@ export function WorkspaceView({ onOpenSettings }: { onOpenSettings: () => void }
     if (!session || uploading) return;
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.tar.gz,.tgz';
+    input.accept = '.tar.gz,.tgz,application/gzip,application/x-gzip';
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
