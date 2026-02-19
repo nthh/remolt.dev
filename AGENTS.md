@@ -59,107 +59,94 @@ docker run -p 3000:8080 -v /var/run/docker.sock:/var/run/docker.sock <server-ima
 
 ## Self-Hosting Guide
 
-### Local Only (no cluster, no domain, no internet exposure)
+Pick the setup that matches your situation:
 
-The server auto-detects its environment. Without K8s, it uses Docker directly. This is the fastest way to run remolt locally.
+| Setup | When to use | What you need |
+|-------|-------------|---------------|
+| **[Local (k3s)](#local-k3s-no-domain-no-internet-exposure)** | Personal use, trying it out, no internet exposure needed | Linux machine (or VM) with Docker |
+| **[Local (Docker only)](#local-k3s-no-domain-no-internet-exposure)** | Quickest possible start, don't need pod isolation | Docker on any OS |
+| **[K8s (production)](#kubernetes-production-exposed)** | Multi-user, public-facing, TLS + auth | K8s cluster, domain, container registry |
 
-**Prerequisites:** Docker running on your machine.
+The recommended path is **local k3s** — it's almost as easy as raw Docker but gives you the real K8s environment with pod isolation, resource limits, and network policies.
+
+### Local (k3s, no domain, no internet exposure)
+
+The recommended way to run remolt locally. k3s gives you a real K8s environment with pod isolation, resource limits, and network policies — and it's one command to install. No domain or TLS needed.
+
+**Prerequisites:** Linux machine (or VM) with Docker.
+
+#### 1. Install k3s
+
+```bash
+curl -sfL https://get.k3s.io | sh -
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+```
+
+k3s includes a container runtime (containerd) and Traefik, but you don't need Traefik for local use.
+
+#### 2. Build and import images
+
+Since you're running locally, you can import images directly into k3s instead of pushing to a registry. Use a tag other than `:latest` (e.g. `:local`) — K8s defaults to `imagePullPolicy: Always` for `:latest`, which tries to contact a registry and fails. Non-latest tags default to `IfNotPresent`, which uses the locally imported image.
 
 ```bash
 git clone https://github.com/nthh/remolt.dev.git && cd remolt.dev
 
-# Build the sandbox image (used for all agents by default)
-docker build -t remolt-sandbox -f container/Dockerfile.base container/
-
-# Build the server image
-docker build -t remolt-server .
-
-# Run — mounts Docker socket so the server can create sandbox containers
-docker run -p 3000:8080 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e REMOLT_SANDBOX_IMAGE=remolt-sandbox \
-  -e REMOLT_ALLOWED_ORIGINS=http://localhost:3000 \
-  remolt-server
-```
-
-Open http://localhost:3000. Auth is disabled (no `GITHUB_CLIENT_ID` set), so you go straight to the setup form. Sandboxes run as Docker containers on your machine.
-
-To build a per-agent image (e.g. with Claude Code pre-installed):
-
-```bash
+# Build images locally
+docker build -t remolt-sandbox-base:local -f container/Dockerfile.base container/
 docker build \
-  --build-arg BASE_IMAGE=remolt-sandbox \
+  --build-arg BASE_IMAGE=remolt-sandbox-base:local \
   --build-arg AGENT_INSTALL="npm install -g @anthropic-ai/claude-code" \
-  -t remolt-claude-code \
+  -t remolt-claude-code:local \
   -f container/Dockerfile.agent container/
+docker build -t remolt-server:local .
 
-# Then run the server with the agent image override:
-docker run -p 3000:8080 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e REMOLT_SANDBOX_IMAGE=remolt-sandbox \
-  -e REMOLT_CLAUDE_CODE_IMAGE=remolt-claude-code \
-  -e REMOLT_ALLOWED_ORIGINS=http://localhost:3000 \
-  remolt-server
+# Import into k3s (no registry needed)
+docker save remolt-sandbox-base:local | sudo k3s ctr images import -
+docker save remolt-claude-code:local | sudo k3s ctr images import -
+docker save remolt-server:local | sudo k3s ctr images import -
 ```
 
-**Notes for local mode:**
-- No HTTPS needed — auth cookies aren't set when auth is disabled, and localhost is fine over HTTP.
-- `git push` / `gh` won't work in sandboxes unless users run `gh auth login` manually (no GitHub token injected without OAuth).
-- The warm pool (`REMOLT_WARM_POOL`) works with Docker too but is unnecessary for single-user local use — set it to `0` or leave it unset.
-- Sandbox containers are cleaned up when sessions are destroyed or idle-timeout. If the server crashes, orphaned containers with label `remolt.managed=true` need manual cleanup: `docker ps -f label=remolt.managed=true -q | xargs docker rm -f`.
+#### 3. Configure and apply manifests
 
----
-
-### Kubernetes (private, no ingress)
-
-Run on a K8s cluster but access it via `kubectl port-forward` — no domain, no TLS, no ingress controller needed. Good for personal use or trying it out on an existing cluster.
-
-```bash
-git clone https://github.com/nthh/remolt.dev.git && cd remolt.dev
-
-REGISTRY=your-registry.example.com
-
-# Build and push images (cluster nodes need to pull these)
-docker buildx build --platform linux/amd64 \
-  -t $REGISTRY/remolt-sandbox-base:latest \
-  -f container/Dockerfile.base container/ --push
-
-docker buildx build --platform linux/amd64 \
-  --build-arg BASE_IMAGE=$REGISTRY/remolt-sandbox-base:latest \
-  --build-arg AGENT_INSTALL="npm install -g @anthropic-ai/claude-code" \
-  -t $REGISTRY/remolt-claude-code:latest \
-  -f container/Dockerfile.agent container/ --push
-
-docker buildx build --platform linux/amd64 \
-  -t $REGISTRY/remolt-server:latest --push .
-```
-
-Edit `k8s/server.yaml` — change the image references and set the origin to your port-forward address:
+Edit `k8s/server.yaml` — change image references to your local tags and set `imagePullPolicy: IfNotPresent`:
 
 ```yaml
-image: your-registry.example.com/remolt-server:latest
+image: remolt-server:local
+imagePullPolicy: IfNotPresent
 # ...
 - name: REMOLT_SANDBOX_IMAGE
-  value: "your-registry.example.com/remolt-sandbox-base:latest"
+  value: "remolt-sandbox-base:local"
 - name: REMOLT_CLAUDE_CODE_IMAGE
-  value: "your-registry.example.com/remolt-claude-code:latest"
+  value: "remolt-claude-code:local"
 - name: REMOLT_ALLOWED_ORIGINS
   value: "http://localhost:3000"
+- name: REMOLT_WARM_POOL
+  value: "0"
 ```
 
-Apply and port-forward:
+Note: the sandbox pod spec in `server.py` does not set `imagePullPolicy`, so K8s uses its default. With non-`:latest` tags this defaults to `IfNotPresent`, which uses the imported images. If you need to force it, add `"imagePullPolicy": "IfNotPresent"` to the container spec in the `K8sBackend.create()` method.
 
 ```bash
 kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/rbac.yaml
 kubectl apply -f k8s/server.yaml
-# Network policy is optional for private use but still recommended:
-kubectl apply -f k8s/network-policy.yaml
+kubectl apply -f k8s/network-policy.yaml   # optional for local, but recommended
+```
 
+#### 4. Access it
+
+```bash
 kubectl -n remolt port-forward svc/remolt-server 3000:8080
 ```
 
-Open http://localhost:3000. No auth, no TLS — same as local Docker mode but sandboxes run as K8s pods with proper resource limits and isolation.
+Open http://localhost:3000. Auth is disabled (no `GITHUB_CLIENT_ID`), so you go straight to the setup form.
+
+**Notes:**
+- No HTTPS needed — auth cookies aren't set when auth is disabled.
+- `git push` / `gh` won't work in sandboxes unless users run `gh auth login` manually (no GitHub token injected without OAuth).
+- NetworkPolicy enforcement requires a CNI that supports it. k3s uses Flannel by default which doesn't enforce. For local use this is fine. For production, install Calico: `kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml`
+
+> **Alternative: raw Docker (no K8s).** The server falls back to Docker when not in K8s — `docker run -p 3000:8080 -v /var/run/docker.sock:/var/run/docker.sock -e REMOLT_ALLOWED_ORIGINS=http://localhost:3000 remolt-server`. Simpler but no pod isolation, resource limits, or network policies.
 
 ---
 
