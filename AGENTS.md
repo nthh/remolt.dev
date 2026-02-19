@@ -50,9 +50,6 @@ pip install fastapi uvicorn[standard] aiodocker httpx websockets cryptography
 
 # Tests
 python -m pytest tests/
-
-# Run locally with Docker backend
-docker run -p 3000:8080 -v /var/run/docker.sock:/var/run/docker.sock <server-image>
 ```
 
 ---
@@ -64,10 +61,7 @@ Pick the setup that matches your situation:
 | Setup | When to use | What you need |
 |-------|-------------|---------------|
 | **[Local (k3s)](#local-k3s-no-domain-no-internet-exposure)** | Personal use, trying it out, no internet exposure needed | Linux machine (or VM) with Docker |
-| **[Local (Docker only)](#local-k3s-no-domain-no-internet-exposure)** | Quickest possible start, don't need pod isolation | Docker on any OS |
 | **[K8s (production)](#kubernetes-production-exposed)** | Multi-user, public-facing, TLS + auth | K8s cluster, domain, container registry |
-
-The recommended path is **local k3s** — it's almost as easy as raw Docker but gives you the real K8s environment with pod isolation, resource limits, and network policies.
 
 ### Local (k3s, no domain, no internet exposure)
 
@@ -145,8 +139,6 @@ Open http://localhost:3000. Auth is disabled (no `GITHUB_CLIENT_ID`), so you go 
 - No HTTPS needed — auth cookies aren't set when auth is disabled.
 - `git push` / `gh` won't work in sandboxes unless users run `gh auth login` manually (no GitHub token injected without OAuth).
 - NetworkPolicy enforcement requires a CNI that supports it. k3s uses Flannel by default which doesn't enforce. For local use this is fine. For production, install Calico: `kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml`
-
-> **Alternative: raw Docker (no K8s).** The server falls back to Docker when not in K8s — `docker run -p 3000:8080 -v /var/run/docker.sock:/var/run/docker.sock -e REMOLT_ALLOWED_ORIGINS=http://localhost:3000 remolt-server`. Simpler but no pod isolation, resource limits, or network policies.
 
 ---
 
