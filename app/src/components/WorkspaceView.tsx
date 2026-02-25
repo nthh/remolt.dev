@@ -19,12 +19,18 @@ export function WorkspaceView({ onOpenSettings }: { onOpenSettings: () => void }
   const { session, wsUrl, destroySession } = useSession();
   const hasDashboard = !!session?.proxy_url;
 
-  const [terminalTabs, setTerminalTabs] = useState<Tab[]>([
-    { id: 'term-0', type: 'terminal', label: 'Term 1', window: 0 },
-  ]);
+  const initialTerminals = session?.terminals ?? 1;
+  const [terminalTabs, setTerminalTabs] = useState<Tab[]>(() =>
+    Array.from({ length: initialTerminals }, (_, i) => ({
+      id: `term-${i}`,
+      type: 'terminal' as const,
+      label: `Term ${i + 1}`,
+      window: i,
+    }))
+  );
   const [activeTabId, setActiveTabId] = useState('term-0');
-  const [nextTermNum, setNextTermNum] = useState(2);
-  const [nextWindow, setNextWindow] = useState(1);
+  const [nextTermNum, setNextTermNum] = useState(initialTerminals + 1);
+  const [nextWindow, setNextWindow] = useState(initialTerminals);
 
   const addTerminal = useCallback(() => {
     if (terminalTabs.length >= MAX_TERMINALS) return;

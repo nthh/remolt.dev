@@ -82,6 +82,11 @@ class FakeBackend:
         stream = FakeExecStream()
         key = f"{sandbox_id}:w{window}" if cmd is None else f"{sandbox_id}:cmd"
         self.streams[key] = stream
+        # Auto-respond to tmux list-sessions queries
+        if cmd and "tmux list-sessions" in cmd:
+            n = self.sandboxes.get(sandbox_id, {}).get("tmux_sessions", 1)
+            stream.push(f"{n}\n".encode())
+            stream.end()
         return stream
 
     async def inject_env(self, sandbox_id: str, env: dict[str, str]) -> None:
@@ -1582,6 +1587,44 @@ def test_list_sessions_includes_created_at(auth_client, fake_backend):
     assert len(data) == 1
     assert "created_at" in data[0]
     assert isinstance(data[0]["created_at"], float)
+
+
+def test_list_sessions_includes_terminals(client, fake_backend):
+    """GET /api/sessions includes terminal count from tmux."""
+    resp = client.post("/api/sessions", json={})
+    assert resp.status_code == 200
+    sid = resp.json()["session_id"]
+
+    # Default: 1 terminal
+    resp = client.get("/api/sessions")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["terminals"] == 1
+
+    # Simulate 3 tmux sessions in the sandbox
+    import server.server as srv
+    s = srv.sessions[sid]
+    fake_backend.sandboxes[s.sandbox_id]["tmux_sessions"] = 3
+    resp = client.get("/api/sessions")
+    data = resp.json()
+    assert data[0]["terminals"] == 3
+
+
+def test_get_session_includes_terminals(client, fake_backend):
+    """GET /api/sessions/{id} includes terminal count from tmux."""
+    resp = client.post("/api/sessions", json={})
+    sid = resp.json()["session_id"]
+
+    resp = client.get(f"/api/sessions/{sid}")
+    assert resp.status_code == 200
+    assert resp.json()["terminals"] == 1
+
+    import server.server as srv
+    s = srv.sessions[sid]
+    fake_backend.sandboxes[s.sandbox_id]["tmux_sessions"] = 2
+    resp = client.get(f"/api/sessions/{sid}")
+    assert resp.json()["terminals"] == 2
 
 
 def test_list_sessions_requires_auth(auth_client, fake_backend):

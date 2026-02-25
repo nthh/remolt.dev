@@ -1235,6 +1235,7 @@ class SessionResp(BaseModel):
     proxy_url: str | None = None
     vscode_url: str | None = None
     logs_ws_url: str | None = None
+    terminals: int = 1
 
 
 @app.get("/health")
@@ -1351,6 +1352,24 @@ async def api_create_session(request: Request, body: CreateSessionReq):
     )
 
 
+async def _count_tmux_sessions(sandbox_id: str) -> int:
+    """Count active tmux sessions inside a sandbox."""
+    try:
+        stream = await backend.exec_attach(
+            sandbox_id, cmd="tmux list-sessions -F '#{session_name}' 2>/dev/null | wc -l", tty=False
+        )
+        buf = b""
+        while True:
+            data = await asyncio.wait_for(stream.read(), timeout=3)
+            if data is None:
+                break
+            buf += data
+        await stream.close()
+        return max(1, int(buf.strip()))
+    except Exception:
+        return 1
+
+
 @app.get("/api/sessions")
 async def api_list_sessions(request: Request):
     """Return all RUNNING sessions owned by the authenticated user."""
@@ -1361,6 +1380,7 @@ async def api_list_sessions(request: Request):
             continue
         agent = AGENTS.get(s.agent_type)
         proxy_url = f"/proxy/{s.session_id}/" if agent and agent.ports else None
+        terminals = await _count_tmux_sessions(s.sandbox_id)
         result.append({
             "session_id": s.session_id,
             "status": s.status.value,
@@ -1368,6 +1388,7 @@ async def api_list_sessions(request: Request):
             "agent_type": s.agent_type,
             "proxy_url": proxy_url,
             "created_at": s.created_at,
+            "terminals": terminals,
         })
     return result
 
@@ -1383,10 +1404,12 @@ async def api_get_session(request: Request, session_id: str):
     agent = AGENTS.get(s.agent_type)
     proxy_url = f"/proxy/{s.session_id}/" if agent and agent.ports else None
     logs_ws_url = f"/ws/logs/{s.session_id}" if agent and agent.ports else None
+    terminals = await _count_tmux_sessions(s.sandbox_id) if s.status == Status.RUNNING else 1
     return SessionResp(
         session_id=s.session_id, status=s.status.value, ws_url=f"/ws/terminal/{s.session_id}",
         agent_type=s.agent_type, proxy_url=proxy_url,
         vscode_url=f"/vscode/{s.session_id}/", logs_ws_url=logs_ws_url,
+        terminals=terminals,
     )
 
 

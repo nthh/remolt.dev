@@ -12,6 +12,7 @@ interface SessionInfo {
   proxy_url: string | null;
   vscode_url: string | null;
   logs_ws_url: string | null;
+  terminals: number;
 }
 
 interface AuthUser {
