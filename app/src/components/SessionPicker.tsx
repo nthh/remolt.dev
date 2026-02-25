@@ -12,11 +12,15 @@ function timeAgo(createdAt: number): string {
 export function SessionPicker() {
   const { activeSessions, agents, resumeSession, skipResume } = useSession();
 
+  const subtitle = activeSessions.length === 1
+    ? 'You have an active session. Resume it or start fresh.'
+    : `You have ${activeSessions.length} active sessions.`;
+
   return (
     <div className="setup-container">
       <div className="setup-card">
         <h1>remolt.dev</h1>
-        <p className="subtitle">You have active sessions. Resume one or start fresh.</p>
+        <p className="subtitle">{subtitle}</p>
         <div className="session-list">
           {activeSessions.map(s => {
             const agent = agents.find(a => a.id === s.agent_type);
@@ -31,6 +35,8 @@ export function SessionPicker() {
                   <span className="agent-card-name">{agent?.name ?? s.agent_type}</span>
                   <span className="agent-card-desc">
                     Started {timeAgo((s as any).created_at)}
+                    {' · '}
+                    {s.session_id.slice(0, 8)}
                   </span>
                 </div>
               </button>

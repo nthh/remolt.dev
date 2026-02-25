@@ -120,17 +120,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // Server unreachable — fall through to localStorage
       }
 
-      if (serverSessions.length === 1) {
-        // Exactly one active session — auto-reconnect
-        const s = serverSessions[0];
-        setSession(s);
-        localStorage.setItem(SESSION_KEY, JSON.stringify(s));
-        setPhase('connected');
-        return;
-      }
-
-      if (serverSessions.length > 1) {
-        // Multiple sessions — show picker
+      if (serverSessions.length > 0) {
+        // Active sessions found — show picker so user can resume or start fresh
         setActiveSessions(serverSessions);
         setPhase('resume');
         return;
