@@ -3,6 +3,7 @@ import { SessionProvider, useSession } from './contexts/SessionContext';
 import { SetupForm } from './components/SetupForm';
 import { WorkspaceView } from './components/WorkspaceView';
 import { SettingsModal } from './components/SettingsModal';
+import { SessionPicker } from './components/SessionPicker';
 
 function LoginScreen() {
   const [repoScope, setRepoScope] = useState<'none' | 'public' | 'private'>('none');
@@ -95,6 +96,10 @@ function AppContent() {
         {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
       </>
     );
+  }
+
+  if (phase === 'resume') {
+    return <SessionPicker />;
   }
 
   return (

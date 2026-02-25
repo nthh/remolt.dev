@@ -1546,6 +1546,51 @@ def test_per_user_limit_independent_between_users(auth_client, fake_backend):
         srv.MAX_USER_SESSIONS = original
 
 
+# -- List sessions endpoint --
+
+
+def test_list_sessions_empty(client, fake_backend):
+    """GET /api/sessions returns empty list when no sessions exist."""
+    resp = client.get("/api/sessions")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_list_sessions_returns_own_sessions(auth_client, fake_backend):
+    """GET /api/sessions returns only sessions owned by the authenticated user."""
+    sid_a = _create_authed_session(auth_client, login="alice")
+    sid_b = _create_authed_session(auth_client, login="alice")
+    _create_authed_session(auth_client, login="bob")
+
+    auth_client.cookies.set("remolt_auth", _make_auth_cookie(login="alice"))
+    resp = auth_client.get("/api/sessions")
+    assert resp.status_code == 200
+    data = resp.json()
+    returned_ids = {s["session_id"] for s in data}
+    assert sid_a in returned_ids
+    assert sid_b in returned_ids
+    assert len(data) == 2
+
+
+def test_list_sessions_includes_created_at(auth_client, fake_backend):
+    """GET /api/sessions includes created_at in each session."""
+    _create_authed_session(auth_client, login="testuser")
+    auth_client.cookies.set("remolt_auth", _make_auth_cookie(login="testuser"))
+    resp = auth_client.get("/api/sessions")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert "created_at" in data[0]
+    assert isinstance(data[0]["created_at"], float)
+
+
+def test_list_sessions_requires_auth(auth_client, fake_backend):
+    """GET /api/sessions returns 401 without auth cookie when AUTH_REQUIRED=True."""
+    auth_client.cookies.clear()
+    resp = auth_client.get("/api/sessions")
+    assert resp.status_code == 401
+
+
 # -- Path traversal --
 
 

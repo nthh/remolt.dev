@@ -1351,6 +1351,27 @@ async def api_create_session(request: Request, body: CreateSessionReq):
     )
 
 
+@app.get("/api/sessions")
+async def api_list_sessions(request: Request):
+    """Return all RUNNING sessions owned by the authenticated user."""
+    user = require_auth(request)
+    result = []
+    for s in sessions.values():
+        if s.status != Status.RUNNING or s.owner != user.login:
+            continue
+        agent = AGENTS.get(s.agent_type)
+        proxy_url = f"/proxy/{s.session_id}/" if agent and agent.ports else None
+        result.append({
+            "session_id": s.session_id,
+            "status": s.status.value,
+            "ws_url": f"/ws/terminal/{s.session_id}",
+            "agent_type": s.agent_type,
+            "proxy_url": proxy_url,
+            "created_at": s.created_at,
+        })
+    return result
+
+
 @app.get("/api/sessions/{session_id}", response_model=SessionResp)
 async def api_get_session(request: Request, session_id: str):
     user = require_auth(request)

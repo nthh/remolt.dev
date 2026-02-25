@@ -853,6 +853,41 @@ html, body, #root {
   color: var(--fg);
 }
 
+/* Session picker */
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.session-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--fg);
+  width: 100%;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.session-card:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.session-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 /* Dashboard iframe */
 .dashboard-frame {
   flex: 1;

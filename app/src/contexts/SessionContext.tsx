@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 
-type Phase = 'loading' | 'auth_required' | 'idle' | 'creating' | 'reconnecting' | 'connected' | 'error';
+type Phase = 'loading' | 'auth_required' | 'idle' | 'creating' | 'reconnecting' | 'connected' | 'error' | 'resume';
 
 const SESSION_KEY = 'remolt:session';
 
@@ -40,6 +40,7 @@ interface SessionContextType {
   autoLaunch: boolean;
   agents: AgentInfo[];
   storedKeys: string[];
+  activeSessions: SessionInfo[];
   createSession: (params: {
     gitUserName?: string;
     gitUserEmail?: string;
@@ -49,6 +50,8 @@ interface SessionContextType {
   destroySession: () => Promise<void>;
   updateKeys: (keys: Record<string, string>) => Promise<void>;
   deleteKey: (keyName: string) => Promise<void>;
+  resumeSession: (info: SessionInfo) => void;
+  skipResume: () => void;
 }
 
 const SessionContext = createContext<SessionContextType | null>(null);
@@ -61,6 +64,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [autoLaunch, setAutoLaunch] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [storedKeys, setStoredKeys] = useState<string[]>([]);
+  const [activeSessions, setActiveSessions] = useState<SessionInfo[]>([]);
 
   const wsUrl = session
     ? `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${session.ws_url}`
@@ -104,45 +108,59 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // 3. Check for saved session
-      const saved = localStorage.getItem(SESSION_KEY);
-      if (!saved) {
-        setPhase('idle');
-        return;
-      }
-
-      let info: SessionInfo;
-      try {
-        info = JSON.parse(saved);
-      } catch {
-        localStorage.removeItem(SESSION_KEY);
-        setPhase('idle');
-        return;
-      }
-
+      // 3. Ask server for all active sessions owned by this user
       setPhase('reconnecting');
-      // Retry a few times — server may be restarting during a deploy
-      let recovered = false;
-      for (let attempt = 0; attempt < 5; attempt++) {
+      let serverSessions: SessionInfo[] = [];
+      try {
+        const res = await fetch('/api/sessions');
+        if (res.ok) {
+          serverSessions = await res.json();
+        }
+      } catch {
+        // Server unreachable — fall through to localStorage
+      }
+
+      if (serverSessions.length === 1) {
+        // Exactly one active session — auto-reconnect
+        const s = serverSessions[0];
+        setSession(s);
+        localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+        setPhase('connected');
+        return;
+      }
+
+      if (serverSessions.length > 1) {
+        // Multiple sessions — show picker
+        setActiveSessions(serverSessions);
+        setPhase('resume');
+        return;
+      }
+
+      // 0 server sessions — fall back to localStorage (covers server-restart race)
+      const saved = localStorage.getItem(SESSION_KEY);
+      if (saved) {
+        let info: SessionInfo;
+        try {
+          info = JSON.parse(saved);
+        } catch {
+          localStorage.removeItem(SESSION_KEY);
+          setPhase('idle');
+          return;
+        }
         try {
           const res = await fetch(`/api/sessions/${info.session_id}`);
           if (res.ok) {
             const data: SessionInfo = await res.json();
             setSession(data);
             setPhase('connected');
-            recovered = true;
-            break;
+            return;
           }
-          if (res.status === 404) break; // Session genuinely gone
         } catch {
-          // Network error — server might be restarting
+          // Network error
         }
-        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
-      }
-      if (!recovered) {
         localStorage.removeItem(SESSION_KEY);
-        setPhase('idle');
       }
+      setPhase('idle');
     })();
   }, []);
 
@@ -177,6 +195,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setError(e instanceof Error ? e.message : 'Unknown error');
       setPhase('error');
     }
+  }, []);
+
+  const resumeSession = useCallback((info: SessionInfo) => {
+    setSession(info);
+    localStorage.setItem(SESSION_KEY, JSON.stringify(info));
+    setPhase('connected');
+  }, []);
+
+  const skipResume = useCallback(() => {
+    setPhase('idle');
   }, []);
 
   const destroySession = useCallback(async () => {
@@ -214,7 +242,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <SessionContext.Provider value={{ session, phase, error, wsUrl, authUser, autoLaunch, agents, storedKeys, createSession, destroySession, updateKeys, deleteKey }}>
+    <SessionContext.Provider value={{ session, phase, error, wsUrl, authUser, autoLaunch, agents, storedKeys, activeSessions, createSession, destroySession, updateKeys, deleteKey, resumeSession, skipResume }}>
       {children}
     </SessionContext.Provider>
   );
