@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remolt-server
+spec:
+  template:
+    spec:
+      containers:
+        - name: server
+          env:
+            - name: REMOLT_SANDBOX_IMAGE
+              value: ghcr.io/nthh/remolt-sandbox:latest
+            - name: REMOLT_MAX_SESSIONS
+              value: "2"
+            - name: REMOLT_MAX_IDLE_SECONDS
+              value: "1800"
+            - name: REMOLT_WARM_POOL
+              value: "0"
+            - name: REMOLT_SANDBOX_BANDWIDTH
+              value: "100mbit"
+            - name: REMOLT_ALLOWED_ORIGINS
+              value: "https://staging.remolt.dev"
+            - name: REMOLT_NAMESPACE
+              value: "remolt-staging"
+            - name: REMOLT_MAX_USER_SESSIONS
+              value: "1"
